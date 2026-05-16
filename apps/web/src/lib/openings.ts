@@ -167,11 +167,26 @@ export async function createNode(
   return data as Node;
 }
 
+export class CrossLinkDeleteError extends Error {
+  /** Names of other openings that have links pointing into the subtree. */
+  blockingOpenings: string[];
+  constructor(openings: string[]) {
+    super(
+      openings.length === 1
+        ? `"${openings[0]}" links to a position in this branch. Unlink or absorb it first.`
+        : `${openings.length} other openings link to positions in this branch. Unlink or absorb them first.`,
+    );
+    this.name = 'CrossLinkDeleteError';
+    this.blockingOpenings = openings;
+  }
+}
+
 export async function deleteSubtree(nodeId: string, openingId: string) {
   // Find any links (in any opening) that point at nodes inside this subtree.
-  // If the subtree's *root* is a canonical with links pointing to it, promote
-  // the earliest-sort_order link so the position survives. Links pointing at
-  // non-root nodes inside the subtree just get cleared (the target is gone).
+  // - Cross-opening links: BLOCK the delete; user must unlink/absorb first.
+  // - Same-opening links to root: promote one to canonical (existing behavior).
+  // - Same-opening links to non-root descendants: also block, since promoting
+  //   them safely would require re-grafting and we have no clean semantics.
   const allNodes = await getNodes(openingId);
   const subtreeIds = new Set<string>();
   function collectIds(id: string) {
@@ -182,29 +197,37 @@ export async function deleteSubtree(nodeId: string, openingId: string) {
   }
   collectIds(nodeId);
 
-  // Find all links (across all openings the user can see) into the subtree.
   const { data: linkRows } = await supabase
     .from('nodes')
-    .select('id, opening_id, sort_order, transposes_to_node_id')
+    .select('id, opening_id, sort_order, transposes_to_node_id, openings(name)')
     .in('transposes_to_node_id', [...subtreeIds]);
 
-  const linksToRoot = (linkRows ?? [])
-    .filter((a) => a.transposes_to_node_id === nodeId)
-    .sort((a, b) => a.sort_order - b.sort_order);
+  const crossLinks = (linkRows ?? []).filter((r) => r.opening_id !== openingId);
+  if (crossLinks.length > 0) {
+    const names = Array.from(new Set(crossLinks.map((r) => (r as any).openings?.name).filter(Boolean)));
+    throw new CrossLinkDeleteError(names);
+  }
 
-  if (linksToRoot.length > 0 && linksToRoot[0].opening_id === openingId) {
-    // Promote the earliest same-opening link to canonical, then delete just
-    // this node.
-    const promoted = linksToRoot[0];
+  const intraLinks = (linkRows ?? []).filter((r) => r.opening_id === openingId);
+  const intraToRoot = intraLinks
+    .filter((r) => r.transposes_to_node_id === nodeId)
+    .sort((a, b) => a.sort_order - b.sort_order);
+  const intraToNonRoot = intraLinks.filter((r) => r.transposes_to_node_id !== nodeId);
+
+  if (intraToNonRoot.length > 0) {
+    throw new Error(
+      'This branch contains nodes that other moves in this opening link to. Re-route those links first.',
+    );
+  }
+
+  if (intraToRoot.length > 0) {
+    const promoted = intraToRoot[0];
     await makeCanonical(openingId, promoted.id, nodeId);
-    // Re-fetch; the subtree's children have been reparented away from nodeId.
     const { error } = await supabase.from('nodes').delete().eq('id', nodeId);
     if (error) throw error;
     return;
   }
 
-  // Otherwise: clear any links pointing into the subtree (FK is ON DELETE
-  // SET NULL — Postgres handles that for us).
   const { error } = await supabase
     .from('nodes')
     .delete()

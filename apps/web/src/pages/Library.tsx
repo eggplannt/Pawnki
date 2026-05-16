@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AppShell } from '@/components/AppShell';
 import { listOpenings, deleteOpening } from '@/lib/openings';
+import { getLearnedCountsByOpening } from '@/lib/review-cards';
 import type { Opening } from '@/types';
 
 type Tab = 'white' | 'black';
-type OpeningWithStats = Opening & { nodeCount: number; dueCount: number };
+type OpeningWithStats = Opening & { nodeCount: number; dueCount: number; learnedCount: number };
 
 export default function Library() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -27,8 +28,11 @@ export default function Library() {
   async function loadOpenings() {
     setLoading(true);
     try {
-      const data = await listOpenings();
-      setOpenings(data);
+      const [data, learnedCounts] = await Promise.all([
+        listOpenings(),
+        getLearnedCountsByOpening().catch(() => new Map<string, number>()),
+      ]);
+      setOpenings(data.map((o) => ({ ...o, learnedCount: learnedCounts.get(o.id) ?? 0 })));
     } finally {
       setLoading(false);
     }
@@ -150,10 +154,19 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
             </h3>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-content-muted text-xs bg-bg-elevated px-2 py-1 rounded-md">
             {Math.max(0, opening.nodeCount - 1)} moves
           </span>
+          {opening.learnedCount > 0 ? (
+            <span className="bg-accent/15 text-accent text-xs font-medium px-2 py-1 rounded-md">
+              {opening.learnedCount} learned
+            </span>
+          ) : (
+            <span className="bg-bg-elevated text-content-muted text-xs px-2 py-1 rounded-md italic">
+              Not learned
+            </span>
+          )}
           {opening.dueCount > 0 && (
             <span className="bg-gold/15 text-gold text-xs font-medium px-2 py-1 rounded-md">
               {opening.dueCount} due

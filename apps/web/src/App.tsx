@@ -7,6 +7,7 @@ import Library from '@/pages/Library';
 import Review from '@/pages/Review';
 import Settings from '@/pages/Settings';
 import OpeningDetail from '@/pages/OpeningDetail';
+import Practice from '@/pages/Practice';
 import AuthCallback from '@/pages/AuthCallback';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -71,6 +72,14 @@ function AppRoutes() {
         element={
           <AuthGuard>
             <OpeningDetail />
+          </AuthGuard>
+        }
+      />
+      <Route
+        path="/practice/:id"
+        element={
+          <AuthGuard>
+            <Practice />
           </AuthGuard>
         }
       />

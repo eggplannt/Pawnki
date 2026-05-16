@@ -9,6 +9,10 @@ import {
   createNode, deleteSubtree, updateNodeAnnotation,
   findTransposition, findIntraOpeningTransposition,
   linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical, getTranspositionTargets, getFirstChildId, positionKey,
+} from '@/lib/openings';
+import { getLearnedNodeIds } from '@/lib/review-cards';
+import { computeApplicableCounts } from '@/lib/practice';
+import {
   importPgnToOpening,
   type ImportProgress,
   type CrossTranspositionMatch,
@@ -115,6 +119,10 @@ function getLegalMoveSquares(fen: string, sourceSquare: string): string[] {
 type LinkTargetInfo = { node: Node; openingId: string; openingName: string; openingColor: 'white' | 'black' };
 const LinkTargetsContext = createContext<Map<string, LinkTargetInfo>>(new Map());
 
+// Threads learned-state into MoveButton for the unlearned/learned dot.
+interface LearnedCtx { learned: Set<string>; userColor: 'white' | 'black' | null }
+const LearnedContext = createContext<LearnedCtx>({ learned: new Set(), userColor: null });
+
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export default function OpeningDetail() {
@@ -124,7 +132,10 @@ export default function OpeningDetail() {
   const navHistory = useNavHistory();
   // Cross-opening switch confirmation. When non-null, modal is shown.
   const [crossSwitch, setCrossSwitch] = useState<{ target: LinkTargetInfo; fromLinkId: string } | null>(null);
+  const [startMode, setStartMode] = useState<'learn' | 'practice' | null>(null);
+  const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
   const [opening, setOpening] = useState<Opening | null>(null);
+  const [learnedNodeIds, setLearnedNodeIds] = useState<Set<string>>(new Set());
   const [tree, setTree] = useState<Node | null>(null);
   const [currentNode, setCurrentNode] = useState<Node | null>(null);
   const [forwardStack, setForwardStack] = useState<Node[]>([]);
@@ -207,8 +218,13 @@ export default function OpeningDetail() {
   async function loadData(openingId: string, navigateToId?: string) {
     setLoading(true);
     try {
-      const [o, nodes] = await Promise.all([getOpening(openingId), getNodes(openingId)]);
+      const [o, nodes, learned] = await Promise.all([
+        getOpening(openingId),
+        getNodes(openingId),
+        getLearnedNodeIds(openingId).catch(() => new Set<string>()),
+      ]);
       setOpening(o);
+      setLearnedNodeIds(learned);
       const t = buildTree(nodes);
       setTree(t);
       if (navigateToId && t) {
@@ -346,6 +362,8 @@ export default function OpeningDetail() {
     try {
       await deleteSubtree(target.id, id);
       await reloadTree(parentId);
+    } catch (e: any) {
+      setDeleteBlocked(e?.message ?? 'Could not delete this branch.');
     } finally {
       setSaving(false);
       setContextMenu(null);
@@ -647,6 +665,22 @@ export default function OpeningDetail() {
 
   const boardFen = pendingFen ?? currentNode?.fen ?? tree.fen;
   const boardOrientation = opening.color === 'white' ? 'white' : 'black';
+  // Count user-move nodes in the tree to decide Learn-button enable.
+  const openingColor = opening.color;
+  const totalUserMoves = (() => {
+    let n = 0;
+    function walk(node: Node) {
+      if (node.move_san !== null) {
+        const side = node.fen.split(' ')[1] === 'w' ? 'white' : 'black';
+        if (side !== openingColor) n++;
+      }
+      for (const c of node.children ?? []) walk(c);
+    }
+    walk(tree);
+    return n;
+  })();
+  const hasUnlearned = learnedNodeIds.size < totalUserMoves;
+  const hasLearned = learnedNodeIds.size > 0;
   const hasLinkTarget = !!(currentNode?.transposes_to_node_id && transTargets.get(currentNode.transposes_to_node_id));
   const hasNext = !!(currentNode?.children?.length) || hasLinkTarget;
   const hasPrev = !!(currentNode && (parentMap.has(currentNode.id) || navHistory.peek()));
@@ -670,9 +704,35 @@ export default function OpeningDetail() {
               {opening.color === 'white' ? '♔' : '♚'}
             </span>
             <h1 className="text-content-primary text-lg font-semibold truncate">{opening.name}</h1>
-            {saving && (
-              <div className="ml-auto w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
-            )}
+            <div className="ml-auto flex items-center gap-1 shrink-0">
+              {saving && (
+                <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin mr-1" />
+              )}
+              <button
+                onClick={() => setStartMode('learn')}
+                disabled={!hasUnlearned}
+                title={hasUnlearned ? 'Learn unlearned positions' : 'Everything in this opening is learned'}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  hasUnlearned
+                    ? 'bg-accent/15 text-accent hover:bg-accent/25'
+                    : 'bg-bg-elevated text-content-muted cursor-not-allowed'
+                }`}
+              >
+                Learn
+              </button>
+              <button
+                onClick={() => setStartMode('practice')}
+                disabled={!hasLearned}
+                title={hasLearned ? 'Practice learned positions' : 'Learn this opening first to unlock practice'}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  hasLearned
+                    ? 'bg-gold/15 text-gold hover:bg-gold/25'
+                    : 'bg-bg-elevated text-content-muted cursor-not-allowed'
+                }`}
+              >
+                Practice
+              </button>
+            </div>
           </div>
 
           {/* Board */}
@@ -798,13 +858,15 @@ export default function OpeningDetail() {
           ) : (
             <div ref={moveListRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 pb-14 min-h-0">
               <LinkTargetsContext.Provider value={transTargets}>
-                <MoveTree
-                  root={tree}
-                  selected={currentNode}
-                  highlightColor={colors.gold.default}
-                  onSelect={selectNode}
-                  onContextMenu={handleMoveContextMenu}
-                />
+                <LearnedContext.Provider value={{ learned: learnedNodeIds, userColor: opening.color }}>
+                  <MoveTree
+                    root={tree}
+                    selected={currentNode}
+                    highlightColor={colors.gold.default}
+                    onSelect={selectNode}
+                    onContextMenu={handleMoveContextMenu}
+                  />
+                </LearnedContext.Provider>
               </LinkTargetsContext.Provider>
             </div>
           )}
@@ -1066,6 +1128,92 @@ export default function OpeningDetail() {
           </div>
         </div>
       )}
+
+      {/* ── Delete-blocked dialog ── */}
+      {deleteBlocked && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setDeleteBlocked(null)}>
+          <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-sm mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-content-primary font-semibold mb-2">Can't delete this branch</h3>
+            <p className="text-content-secondary text-sm mb-4">{deleteBlocked}</p>
+            <button
+              onClick={() => setDeleteBlocked(null)}
+              className="w-full py-2 rounded-lg bg-accent/15 text-accent text-sm font-medium hover:bg-accent/25"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Learn / Practice start dialog ── */}
+      {startMode && opening && currentNode && id && (() => {
+        const counts = computeApplicableCounts(currentNode, opening.color, learnedNodeIds, startMode);
+        const fromHereCount = counts.get(currentNode.id) ?? 0;
+        const fromHereEnabled = fromHereCount > 0;
+        const fromRootEnabled = startMode === 'learn' ? hasUnlearned : hasLearned;
+        const isLearn = startMode === 'learn';
+        const enabledCls = isLearn
+          ? 'bg-accent/15 text-accent hover:bg-accent/25'
+          : 'bg-gold/15 text-gold hover:bg-gold/25';
+        const title = isLearn ? 'Learn unlearned positions' : 'Practice learned positions';
+        const startUrl = (fromCurrent: boolean) =>
+          `/practice/${id}?mode=${startMode}${fromCurrent && currentNode.id !== tree.id ? `&from=${currentNode.id}` : ''}`;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setStartMode(null)}>
+            <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-sm mx-4 shadow-2xl w-full" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-content-primary font-semibold mb-1">{title}</h3>
+              <p className="text-content-muted text-sm mb-4">Where do you want to start?</p>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => { setStartMode(null); navigate(startUrl(false)); }}
+                  disabled={!fromRootEnabled}
+                  className={[
+                    'w-full px-3 py-2.5 rounded-lg text-sm font-medium text-left transition-colors',
+                    fromRootEnabled
+                      ? enabledCls
+                      : 'bg-bg-surface text-content-muted cursor-not-allowed',
+                  ].join(' ')}
+                >
+                  From beginning
+                  <span className="block text-xs opacity-70 mt-0.5">Walk the entire opening</span>
+                </button>
+                <button
+                  onClick={() => { setStartMode(null); navigate(startUrl(true)); }}
+                  disabled={!fromHereEnabled}
+                  title={
+                    fromHereEnabled
+                      ? undefined
+                      : isLearn
+                        ? 'Nothing unlearned in this subtree.'
+                        : 'Nothing learned in this subtree yet.'
+                  }
+                  className={[
+                    'w-full px-3 py-2.5 rounded-lg text-sm font-medium text-left transition-colors',
+                    fromHereEnabled
+                      ? enabledCls
+                      : 'bg-bg-surface text-content-muted cursor-not-allowed',
+                  ].join(' ')}
+                >
+                  From this position
+                  <span className="block text-xs opacity-70 mt-0.5">
+                    {fromHereEnabled
+                      ? `Only the subtree below ${currentNode.move_san ?? 'the start'}`
+                      : isLearn
+                        ? 'Nothing left to learn here'
+                        : 'Nothing learned here yet'}
+                  </span>
+                </button>
+              </div>
+              <button
+                onClick={() => setStartMode(null)}
+                className="mt-4 w-full py-2 rounded-lg border border-border text-content-secondary text-sm hover:bg-bg-surface"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── PGN post-import transposition review ── */}
       {importTranspositionCount !== null && (
@@ -1391,6 +1539,9 @@ function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
   const prefix = movePrefix(node, forceNumber);
   const white = isWhiteMove(node);
   const linkTargets = useContext(LinkTargetsContext);
+  const { learned, userColor } = useContext(LearnedContext);
+  const isUserMove = userColor !== null && (node.fen.split(' ')[1] === 'w' ? 'white' : 'black') !== userColor && node.move_san !== null;
+  const isLearned = isUserMove && learned.has(node.id);
   const isLink = !!node.transposes_to_node_id;
   const target = node.transposes_to_node_id ? linkTargets.get(node.transposes_to_node_id) : null;
   const isCrossLink = !!(target && target.openingId !== node.opening_id);
@@ -1421,6 +1572,16 @@ function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
         ].join(' ')}
       >
         <span>{node.move_san}</span>
+        {isUserMove && (
+          <span
+            aria-hidden
+            title={isLearned ? 'Learned' : 'Not yet learned'}
+            className={[
+              'inline-block w-1.5 h-1.5 rounded-full self-center',
+              isLearned ? 'bg-accent' : 'bg-content-muted/40',
+            ].join(' ')}
+          />
+        )}
         {isLink && (
           <span
             aria-hidden
