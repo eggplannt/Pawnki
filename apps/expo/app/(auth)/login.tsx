@@ -1,5 +1,6 @@
 import { View, Text, Pressable, ActivityIndicator } from 'react-native';
 import { useState } from 'react';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '@/hooks/useAuth';
 import { colorTheme } from '@/hooks/useColorTheme';
 
@@ -21,7 +22,7 @@ export default function LoginScreen() {
       <View style={{ width: '100%', maxWidth: 380 }}>
         {/* Logo */}
         <View className="flex-row items-center gap-2 mb-3">
-          <Text className="text-accent text-lg">♟</Text>
+          <MaterialCommunityIcons name="chess-pawn" size={22} color={colorTheme.accent.default} />
           <Text>
             <Text className="text-accent text-4xl font-bold">Pawn</Text>
             <Text className="text-gold text-4xl font-bold">tree</Text>
@@ -37,14 +38,14 @@ export default function LoginScreen() {
 
         {/* Feature list */}
         <View className="mb-10 gap-3">
-          {[
-            { icon: '♟', text: 'Import or build opening trees from PGN' },
-            { icon: '⚔', text: 'Depth-first practice drills' },
-            { icon: '✦', text: 'Anki-style daily review sessions' },
-          ].map(({ icon, text }) => (
+          {([
+            { icon: 'chess-pawn', text: 'Import or build opening trees from PGN' },
+            { icon: 'sword-cross', text: 'Depth-first practice drills' },
+            { icon: 'star-four-points-outline', text: 'Anki-style daily review sessions' },
+          ] as const).map(({ icon, text }) => (
             <View key={text} className="flex-row items-center gap-3">
               <View className="w-8 h-8 rounded-lg bg-accent/10 items-center justify-center">
-                <Text className="text-accent">{icon}</Text>
+                <MaterialCommunityIcons name={icon} size={16} color={colorTheme.accent.default} />
               </View>
               <Text className="text-content-secondary text-sm flex-1">{text}</Text>
             </View>

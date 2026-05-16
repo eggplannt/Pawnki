@@ -10,6 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppShell } from '@/components/AppShell';
 import { listOpenings, createOpening, deleteOpening, type ImportProgress } from '@/lib/openings';
 import { colorTheme } from '@/hooks/useColorTheme';
@@ -47,47 +48,44 @@ export default function LibraryScreen() {
         {/* Header */}
         <View className="flex-row items-center justify-between px-5 pt-5 pb-3">
           <View className="flex-row items-center gap-2">
-            <Text className="text-accent text-lg">♟</Text>
+            <MaterialCommunityIcons name="chess-pawn" size={22} color={colorTheme.accent.default} />
             <Text className="text-content-primary text-2xl font-semibold">Library</Text>
           </View>
           <Pressable
             onPress={() => setShowCreate(true)}
             className="flex-row items-center gap-1.5 bg-accent px-4 py-2.5 rounded-xl active:opacity-80"
           >
-            <Text className="text-bg-base text-lg leading-none">+</Text>
+            <MaterialCommunityIcons name="plus" size={16} color={colorTheme.bg.base} />
             <Text className="text-bg-base font-medium text-sm">New</Text>
           </Pressable>
         </View>
 
         {/* Tabs */}
         <View className="flex-row gap-1 bg-bg-surface rounded-xl p-1 mx-5 mb-4 border border-border-subtle">
-          {(['white', 'black'] as const).map((t) => (
-            <Pressable
-              key={t}
-              onPress={() => setTab(t)}
-              className={[
-                'flex-1 py-2.5 rounded-lg items-center',
-                tab === t
-                  ? t === 'white'
-                    ? 'bg-gold/15'
-                    : 'bg-accent/15'
-                  : '',
-              ].join(' ')}
-            >
-              <Text
+          {(['white', 'black'] as const).map((t) => {
+            const tintColor = tab === t
+              ? t === 'white' ? colorTheme.gold.default : colorTheme.accent.default
+              : colorTheme.content.muted;
+            return (
+              <Pressable
+                key={t}
+                onPress={() => setTab(t)}
                 className={[
-                  'text-sm font-medium',
+                  'flex-1 flex-row items-center justify-center gap-1.5 py-2.5 rounded-lg',
                   tab === t
                     ? t === 'white'
-                      ? 'text-gold'
-                      : 'text-accent'
-                    : 'text-content-muted',
+                      ? 'bg-gold/15'
+                      : 'bg-accent/15'
+                    : '',
                 ].join(' ')}
               >
-                {t === 'white' ? '♔ White' : '♚ Black'}
-              </Text>
-            </Pressable>
-          ))}
+                <MaterialCommunityIcons name="chess-king" size={16} color={tintColor} />
+                <Text className="text-sm font-medium" style={{ color: tintColor }}>
+                  {t === 'white' ? 'White' : 'Black'}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
 
         {/* Content */}
@@ -97,9 +95,13 @@ export default function LibraryScreen() {
           </View>
         ) : filtered.length === 0 ? (
           <View className="flex-1 items-center justify-center px-8">
-            <Text className="text-5xl mb-4 opacity-30">
-              {tab === 'white' ? '♔' : '♚'}
-            </Text>
+            <View className="mb-4 opacity-30">
+              <MaterialCommunityIcons
+                name="chess-king"
+                size={64}
+                color={tab === 'white' ? colorTheme.gold.default : colorTheme.accent.default}
+              />
+            </View>
             <Text className="text-content-muted text-lg mb-2">
               No {tab} openings yet
             </Text>
@@ -173,9 +175,11 @@ function OpeningCard({
 
       <View className="p-4">
         <View className="flex-row items-center gap-2 mb-3">
-          <Text className={`text-lg ${isWhite ? 'text-gold' : 'text-accent'}`}>
-            {isWhite ? '♔' : '♚'}
-          </Text>
+          <MaterialCommunityIcons
+            name="chess-king"
+            size={18}
+            color={isWhite ? colorTheme.gold.default : colorTheme.accent.default}
+          />
           <Text className="text-content-primary font-medium flex-1">{opening.name}</Text>
         </View>
         <View className="flex-row items-center gap-3">
@@ -292,33 +296,30 @@ function CreateOpeningModal({
                 <View>
                   <Text className="text-content-secondary text-sm mb-1">Color</Text>
                   <View className="flex-row gap-2">
-                    {(['white', 'black'] as const).map((c) => (
-                      <Pressable
-                        key={c}
-                        onPress={() => setColor(c)}
-                        className={[
-                          'flex-1 py-2.5 rounded-xl items-center border',
-                          color === c
-                            ? c === 'white'
-                              ? 'border-gold bg-gold/10'
-                              : 'border-accent bg-accent/10'
-                            : 'border-border',
-                        ].join(' ')}
-                      >
-                        <Text
+                    {(['white', 'black'] as const).map((c) => {
+                      const tintColor = color === c
+                        ? c === 'white' ? colorTheme.gold.default : colorTheme.accent.default
+                        : colorTheme.content.muted;
+                      return (
+                        <Pressable
+                          key={c}
+                          onPress={() => setColor(c)}
                           className={[
-                            'text-sm font-medium',
+                            'flex-1 flex-row items-center justify-center gap-1.5 py-2.5 rounded-xl border',
                             color === c
                               ? c === 'white'
-                                ? 'text-gold'
-                                : 'text-accent'
-                              : 'text-content-muted',
+                                ? 'border-gold bg-gold/10'
+                                : 'border-accent bg-accent/10'
+                              : 'border-border',
                           ].join(' ')}
                         >
-                          {c === 'white' ? '♔ White' : '♚ Black'}
-                        </Text>
-                      </Pressable>
-                    ))}
+                          <MaterialCommunityIcons name="chess-king" size={16} color={tintColor} />
+                          <Text className="text-sm font-medium" style={{ color: tintColor }}>
+                            {c === 'white' ? 'White' : 'Black'}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
                   </View>
                 </View>
 

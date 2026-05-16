@@ -1,6 +1,8 @@
 import { View, Text, Pressable } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/hooks/useAuth';
+import { colorTheme } from '@/hooks/useColorTheme';
 
 export default function SettingsScreen() {
   const { user, signOut } = useAuth();
@@ -8,7 +10,7 @@ export default function SettingsScreen() {
     <AppShell>
       <View className="flex-1 bg-bg-base p-8">
         <View className="flex-row items-center gap-2 mb-2">
-          <Text className="text-content-muted text-lg">⚙</Text>
+          <MaterialCommunityIcons name="cog-outline" size={22} color={colorTheme.content.muted} />
           <Text className="text-content-primary text-2xl font-semibold">Settings</Text>
         </View>
         {user && <Text className="text-content-secondary text-sm mb-4">{user.email}</Text>}

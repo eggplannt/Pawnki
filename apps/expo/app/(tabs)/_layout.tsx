@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colorTheme } from '@/hooks/useColorTheme';
 
 export default function TabsLayout() {
@@ -23,7 +23,7 @@ export default function TabsLayout() {
         options={{
           title: 'Library',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="library-outline" size={size} color={color} />
+            <MaterialCommunityIcons name="bookshelf" size={size} color={color} />
           ),
         }}
       />
@@ -32,7 +32,7 @@ export default function TabsLayout() {
         options={{
           title: 'Review',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="calendar-outline" size={size} color={color} />
+            <MaterialCommunityIcons name="calendar-check-outline" size={size} color={color} />
           ),
         }}
       />
@@ -41,7 +41,7 @@ export default function TabsLayout() {
         options={{
           title: 'Settings',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings-outline" size={size} color={color} />
+            <MaterialCommunityIcons name="cog-outline" size={size} color={color} />
           ),
         }}
       />

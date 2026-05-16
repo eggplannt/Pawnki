@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   getNodes, buildTree,
   createNode, deleteSubtree, updateNodeAnnotation,
@@ -343,11 +344,13 @@ export default function OpeningDetailScreen() {
           onPress={() => router.back()}
           className="w-8 h-8 items-center justify-center rounded-lg active:bg-bg-elevated"
         >
-          <Text className="text-content-muted text-lg">←</Text>
+          <MaterialCommunityIcons name="arrow-left" size={20} color={colorTheme.content.muted} />
         </Pressable>
-        <Text className={`text-lg ${isWhite ? 'text-gold' : 'text-accent'}`}>
-          {isWhite ? '♔' : '♚'}
-        </Text>
+        <MaterialCommunityIcons
+          name="chess-king"
+          size={20}
+          color={isWhite ? colorTheme.gold.default : colorTheme.accent.default}
+        />
         <Text className="text-content-primary text-base font-semibold flex-1" numberOfLines={1}>
           {opening.name}
         </Text>
@@ -374,10 +377,10 @@ export default function OpeningDetailScreen() {
 
       {/* Nav controls */}
       <View className="flex-row items-center justify-center gap-2 py-2">
-        <NavButton onPress={goToStart} disabled={!hasPrev} label="⏮" />
-        <NavButton onPress={goPrev} disabled={!hasPrev} label="◀" />
-        <NavButton onPress={goNext} disabled={!hasNext} label="▶" />
-        <NavButton onPress={goToEnd} disabled={!hasNext} label="⏭" />
+        <NavButton onPress={goToStart} disabled={!hasPrev} icon="skip-previous" />
+        <NavButton onPress={goPrev} disabled={!hasPrev} icon="chevron-left" />
+        <NavButton onPress={goNext} disabled={!hasNext} icon="chevron-right" />
+        <NavButton onPress={goToEnd} disabled={!hasNext} icon="skip-next" />
       </View>
 
       {/* Current move + annotation */}
@@ -401,7 +404,7 @@ export default function OpeningDetailScreen() {
       {/* Move tree */}
       <View className="flex-1 border-t border-border mt-1">
         <View className="flex-row items-center gap-2 px-4 py-2 border-b border-border">
-          <Text className="text-accent text-xs">♟</Text>
+          <MaterialCommunityIcons name="chess-pawn" size={14} color={colorTheme.accent.default} />
           <Text className="text-content-secondary text-xs font-medium uppercase tracking-wider flex-1">
             Moves
           </Text>
@@ -578,11 +581,11 @@ export default function OpeningDetailScreen() {
 }
 
 const NavButton = memo(function NavButton({
-  onPress, disabled, label,
+  onPress, disabled, icon,
 }: {
   onPress: () => void;
   disabled: boolean;
-  label: string;
+  icon: 'skip-previous' | 'chevron-left' | 'chevron-right' | 'skip-next';
 }) {
   return (
     <Pressable
@@ -593,9 +596,11 @@ const NavButton = memo(function NavButton({
         disabled ? 'opacity-30' : 'active:bg-accent/5 active:border-accent/40',
       ].join(' ')}
     >
-      <Text className={disabled ? 'text-content-muted' : 'text-content-secondary'}>
-        {label}
-      </Text>
+      <MaterialCommunityIcons
+        name={icon}
+        size={20}
+        color={disabled ? colorTheme.content.muted : colorTheme.content.secondary}
+      />
     </Pressable>
   );
 });
@@ -694,7 +699,11 @@ const VariationBlock = memo(function VariationBlock({
       <View className="flex-row flex-wrap items-baseline" style={{ gap: 2 }}>
         {isLong && (
           <Pressable onPress={() => setCollapsed(!collapsed)} className="mr-0.5">
-            <Text className="text-accent/50 text-xs">{collapsed ? '▶' : '▼'}</Text>
+            <MaterialCommunityIcons
+              name={collapsed ? 'chevron-right' : 'chevron-down'}
+              size={14}
+              color={colorTheme.accent.default + '80'}
+            />
           </Pressable>
         )}
         {collapsed ? (
