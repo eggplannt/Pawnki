@@ -135,9 +135,9 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
   }
 
   return (
-    <div className="relative bg-bg-surface border border-border rounded-xl overflow-hidden hover:border-accent/40 transition-all group hover:shadow-md hover:shadow-black/10">
+    <div className="relative bg-bg-surface border border-border rounded-xl hover:border-accent/40 transition-all group hover:shadow-md hover:shadow-black/10">
       {/* Color stripe at top */}
-      <div className={`h-1 ${isWhite ? 'bg-gold' : 'bg-accent'}`} />
+      <div className={`h-1 rounded-t-xl ${isWhite ? 'bg-gold' : 'bg-accent'}`} />
 
       <Link to={`/library/${opening.id}`} className="block p-4">
         <div className="flex items-start justify-between mb-3 pr-6">
@@ -152,7 +152,7 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
         </div>
         <div className="flex items-center gap-3">
           <span className="text-content-muted text-xs bg-bg-elevated px-2 py-1 rounded-md">
-            {opening.nodeCount} moves
+            {Math.max(0, opening.nodeCount - 1)} moves
           </span>
           {opening.dueCount > 0 && (
             <span className="bg-gold/15 text-gold text-xs font-medium px-2 py-1 rounded-md">
