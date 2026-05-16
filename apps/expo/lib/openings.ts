@@ -333,6 +333,22 @@ export async function getTranspositionTargets(
   return out;
 }
 
+/**
+ * Return the id of the lowest-sort_order child of `parentId`, or null if it
+ * has no children. Used when following a transposition link so the board
+ * actually advances past the (same-position) canonical node.
+ */
+export async function getFirstChildId(parentId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('nodes')
+    .select('id')
+    .eq('parent_id', parentId)
+    .order('sort_order', { ascending: true })
+    .limit(1);
+  if (error || !data || data.length === 0) return null;
+  return data[0].id;
+}
+
 export async function linkNode(linkNodeId: string, canonicalNodeId: string) {
   const { error } = await supabase
     .from('nodes')

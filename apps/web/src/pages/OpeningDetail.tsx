@@ -8,7 +8,7 @@ import {
   getOpening, getNodes, buildTree,
   createNode, deleteSubtree, updateNodeAnnotation,
   findTransposition, findIntraOpeningTransposition,
-  linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical, getTranspositionTargets, positionKey,
+  linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical, getTranspositionTargets, getFirstChildId, positionKey,
   importPgnToOpening,
   type ImportProgress,
   type CrossTranspositionMatch,
@@ -268,15 +268,17 @@ export default function OpeningDetail() {
       const target = transTargets.get(currentNode.transposes_to_node_id);
       if (target) {
         if (target.openingId === id) {
-          // Intra-opening: jump straight to the canonical (branching) node.
-          navHistory.push({
-            from: { openingId: id, nodeId: currentNode.id },
-            to: { openingId: id, nodeId: target.node.id },
-          });
+          // Intra-opening: jump past the canonical to its first child —
+          // otherwise the position doesn't change and the board looks frozen.
           if (tree) {
             const targetInTree = findNodeById(tree, target.node.id);
             if (targetInTree) {
-              setCurrentNode(targetInTree);
+              const landing = targetInTree.children?.[0] ?? targetInTree;
+              navHistory.push({
+                from: { openingId: id, nodeId: currentNode.id },
+                to: { openingId: id, nodeId: landing.id },
+              });
+              setCurrentNode(landing);
               setForwardStack([]);
               return;
             }
@@ -1042,15 +1044,19 @@ export default function OpeningDetail() {
                 Stay here
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
+                  const canonicalId = crossSwitch.target.node.id;
+                  const targetOpening = crossSwitch.target.openingId;
+                  // Land on the canonical's first child if any, so the board
+                  // actually advances past the (same-position) canonical.
+                  const firstChildId = await getFirstChildId(canonicalId);
+                  const landingId = firstChildId ?? canonicalId;
                   navHistory.push({
                     from: { openingId: id, nodeId: crossSwitch.fromLinkId },
-                    to: { openingId: crossSwitch.target.openingId, nodeId: crossSwitch.target.node.id },
+                    to: { openingId: targetOpening, nodeId: landingId },
                   });
-                  const targetId = crossSwitch.target.node.id;
-                  const targetOpening = crossSwitch.target.openingId;
                   setCrossSwitch(null);
-                  navigate(`/library/${targetOpening}?node=${targetId}`);
+                  navigate(`/library/${targetOpening}?node=${landingId}`);
                 }}
                 className="flex-1 py-2 rounded-lg bg-accent text-bg-base font-medium text-sm hover:bg-accent-hover transition-colors"
               >

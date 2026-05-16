@@ -23,7 +23,7 @@ import {
   findTransposition, findIntraOpeningTransposition,
   importPgnToOpening,
   linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical,
-  getTranspositionTargets, positionKey,
+  getTranspositionTargets, getFirstChildId, positionKey,
   type ImportProgress,
   type CrossTranspositionMatch,
   type IntraTranspositionMatch,
@@ -135,6 +135,7 @@ export default function OpeningDetailScreen() {
   const [transTargets, setTransTargets] = useState<Map<string, TargetInfo>>(new Map());
   const [panelMode, setPanelMode] = useState<'moves' | 'links'>('moves');
   const [crossSwitch, setCrossSwitch] = useState<{ targetInfo: TargetInfo; fromNodeId: string } | null>(null);
+  const [currentHasTrans, setCurrentHasTrans] = useState(false);
 
   const parentMap = useMemo(
     () => (tree ? buildParentMap(tree) : new Map<string, Node>()),
@@ -153,6 +154,39 @@ export default function OpeningDetailScreen() {
   }, [tree]);
 
   const linkEntries = useMemo(() => (tree ? collectLinks(tree) : []), [tree]);
+
+  // Whether the current node has a transposition available (intra or cross)
+  // — drives visibility of the Transpose re-prompt button.
+  useEffect(() => {
+    if (!currentNode || !id || currentNode === tree) {
+      setCurrentHasTrans(false);
+      return;
+    }
+    if (currentNode.transposes_to_node_id) {
+      setCurrentHasTrans(true);
+      return;
+    }
+    // Intra check is in-memory: another node in this opening with same position_key.
+    const key = currentNode.position_key;
+    let intraDup = false;
+    for (const n of nodeMap.values()) {
+      if (n.id !== currentNode.id && n.position_key === key) { intraDup = true; break; }
+    }
+    if (intraDup) {
+      setCurrentHasTrans(true);
+      return;
+    }
+    // Cross check needs a DB hit.
+    let cancelled = false;
+    setCurrentHasTrans(false);
+    (async () => {
+      const parent = parentMap.get(currentNode.id);
+      if (!parent) return;
+      const cross = await findTransposition(currentNode.fen, parent.fen, id);
+      if (!cancelled && cross) setCurrentHasTrans(true);
+    })();
+    return () => { cancelled = true; };
+  }, [currentNode, id, nodeMap, parentMap, tree]);
 
   // Refresh targets whenever the set of links changes.
   const linkTargetIdsKey = useMemo(
@@ -264,10 +298,16 @@ export default function OpeningDetailScreen() {
       const target = transTargets.get(currentNode.transposes_to_node_id);
       if (target) {
         if (target.openingId === id) {
-          // Intra: jump to canonical in this opening.
+          // Intra: jump past the canonical to its first child — otherwise
+          // the position doesn't change and the board looks frozen.
           const targetNode = nodeMap.get(target.node.id);
           if (targetNode) {
-            setCurrentNode(targetNode);
+            const landing = targetNode.children?.[0] ?? targetNode;
+            navHistory.push({
+              from: { openingId: id, nodeId: currentNode.id },
+              to: { openingId: id, nodeId: landing.id },
+            });
+            setCurrentNode(landing);
             setForwardStack([]);
             return;
           }
@@ -534,17 +574,20 @@ export default function OpeningDetailScreen() {
 
   // ── Cross-opening switch confirmation ────────────────────────────────────
 
-  const confirmCrossSwitch = useCallback(() => {
+  const confirmCrossSwitch = useCallback(async () => {
     if (!crossSwitch || !id || !currentNode) return;
+    const canonicalId = crossSwitch.targetInfo.node.id;
+    const firstChildId = await getFirstChildId(canonicalId);
+    const landingId = firstChildId ?? canonicalId;
     navHistory.push({
       from: { openingId: id, nodeId: crossSwitch.fromNodeId },
-      to: { openingId: crossSwitch.targetInfo.openingId, nodeId: crossSwitch.targetInfo.node.id },
+      to: { openingId: crossSwitch.targetInfo.openingId, nodeId: landingId },
     });
     router.push({
       pathname: '/opening/[id]',
       params: {
         id: crossSwitch.targetInfo.openingId,
-        node: crossSwitch.targetInfo.node.id,
+        node: landingId,
         name: crossSwitch.targetInfo.openingName,
         color: crossSwitch.targetInfo.openingColor,
       },
@@ -681,13 +724,15 @@ export default function OpeningDetailScreen() {
           <View style={{ flex: 1 }} />
           {currentNode && !isRoot && panelMode === 'moves' && (
             <>
-              <Pressable
-                onPress={() => openTransReprompt(currentNode)}
-                disabled={saving}
-                className="px-2 py-1 rounded-md bg-accent/10 active:bg-accent/20 mr-1"
-              >
-                <Text className="text-accent text-xs font-medium">⇄</Text>
-              </Pressable>
+              {currentHasTrans && (
+                <Pressable
+                  onPress={() => openTransReprompt(currentNode)}
+                  disabled={saving}
+                  className="px-2 py-1 rounded-md bg-accent/10 active:bg-accent/20 mr-1"
+                >
+                  <Text className="text-accent text-xs font-medium">Transpose</Text>
+                </Pressable>
+              )}
               <Pressable
                 onPress={handleDelete}
                 disabled={saving}
