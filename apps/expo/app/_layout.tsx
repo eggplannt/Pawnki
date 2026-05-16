@@ -34,6 +34,7 @@ export default function RootLayout() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="auth/callback" />
             <Stack.Screen name="opening/[id]" />
+            <Stack.Screen name="practice/[id]" />
           </Stack>
         </NavHistoryProvider>
       </AuthProvider>

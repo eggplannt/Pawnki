@@ -8,16 +8,19 @@ import {
   TextInput,
   Modal,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppShell } from '@/components/AppShell';
 import { listOpenings, createOpening, deleteOpening, type ImportProgress } from '@/lib/openings';
+import { getLearnedCountsByOpening } from '@/lib/review-cards';
 import { colorTheme } from '@/hooks/useColorTheme';
 import type { Opening } from '@/types';
 
 type Tab = 'white' | 'black';
-type OpeningWithStats = Opening & { nodeCount: number; dueCount: number };
+type OpeningWithStats = Opening & { nodeCount: number; dueCount: number; learnedCount: number };
 
 export default function LibraryScreen() {
   const [tab, setTab] = useState<Tab>('white');
@@ -29,8 +32,11 @@ export default function LibraryScreen() {
   const loadOpenings = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await listOpenings();
-      setOpenings(data);
+      const [data, learnedCounts] = await Promise.all([
+        listOpenings(),
+        getLearnedCountsByOpening().catch(() => new Map<string, number>()),
+      ]);
+      setOpenings(data.map((o) => ({ ...o, learnedCount: learnedCounts.get(o.id) ?? 0 })));
     } finally {
       setLoading(false);
     }
@@ -182,10 +188,19 @@ function OpeningCard({
           />
           <Text className="text-content-primary font-medium flex-1">{opening.name}</Text>
         </View>
-        <View className="flex-row items-center gap-3">
+        <View className="flex-row items-center gap-2 flex-wrap">
           <View className="bg-bg-elevated px-2 py-1 rounded-md">
             <Text className="text-content-muted text-xs">{opening.nodeCount} moves</Text>
           </View>
+          {opening.learnedCount > 0 ? (
+            <View className="bg-accent/15 px-2 py-1 rounded-md">
+              <Text className="text-accent text-xs font-medium">{opening.learnedCount} learned</Text>
+            </View>
+          ) : (
+            <View className="bg-bg-elevated px-2 py-1 rounded-md">
+              <Text className="text-content-muted text-xs italic">Not learned</Text>
+            </View>
+          )}
           {opening.dueCount > 0 && (
             <View className="bg-gold/15 px-2 py-1 rounded-md">
               <Text className="text-gold text-xs font-medium">{opening.dueCount} due</Text>
@@ -237,14 +252,18 @@ function CreateOpeningModal({
 
   return (
     <Modal visible animationType="slide" transparent>
-      <Pressable
-        className="flex-1 bg-black/60 justify-end"
-        onPress={saving ? undefined : onClose}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
       >
         <Pressable
-          className="bg-bg-surface border-t border-border rounded-t-2xl"
-          onPress={() => {}} // prevent close on inner press
+          className="flex-1 bg-black/60 justify-end"
+          onPress={saving ? undefined : onClose}
         >
+          <Pressable
+            className="bg-bg-surface border-t border-border rounded-t-2xl"
+            onPress={() => {}} // prevent close on inner press
+          >
           {/* Header stripe */}
           <View className="flex-row gap-1 px-6 pt-6 mb-4">
             <View className="h-1 flex-1 rounded-full bg-accent" />
@@ -359,8 +378,9 @@ function CreateOpeningModal({
               </View>
             )}
           </View>
+          </Pressable>
         </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

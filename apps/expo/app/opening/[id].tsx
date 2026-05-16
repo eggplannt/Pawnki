@@ -28,6 +28,8 @@ import {
   type CrossTranspositionMatch,
   type IntraTranspositionMatch,
 } from '@/lib/openings';
+import { getLearnedNodeIds } from '@/lib/review-cards';
+import { computeApplicableCounts } from '@/lib/practice';
 import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chessboard, type ChessboardMove } from '@/components/Chessboard';
 import { MoveList } from '@/components/MoveList';
@@ -136,6 +138,9 @@ export default function OpeningDetailScreen() {
   const [panelMode, setPanelMode] = useState<'moves' | 'links'>('moves');
   const [crossSwitch, setCrossSwitch] = useState<{ targetInfo: TargetInfo; fromNodeId: string } | null>(null);
   const [currentHasTrans, setCurrentHasTrans] = useState(false);
+  const [learnedNodeIds, setLearnedNodeIds] = useState<Set<string>>(new Set());
+  const [startMode, setStartMode] = useState<'learn' | 'practice' | null>(null);
+  const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
 
   const parentMap = useMemo(
     () => (tree ? buildParentMap(tree) : new Map<string, Node>()),
@@ -222,12 +227,14 @@ export default function OpeningDetailScreen() {
       setLoading(true);
       setTreeReady(false);
       try {
-        const [op, nodes] = await Promise.all([
+        const [op, nodes, learned] = await Promise.all([
           getOpening(id).catch(() => null),
           getNodes(id),
+          getLearnedNodeIds(id).catch(() => new Set<string>()),
         ]);
         if (cancelled) return;
         if (op) setOpening(op);
+        setLearnedNodeIds(learned);
         const t = buildTree(nodes);
         setTree(t);
         // Honor ?node= deep link
@@ -519,6 +526,8 @@ export default function OpeningDetailScreen() {
     try {
       await deleteSubtree(currentNode.id, id);
       await reloadTree(parentId);
+    } catch (e: any) {
+      setDeleteBlocked(e?.message ?? 'Could not delete this branch.');
     } finally {
       setSaving(false);
     }
@@ -628,6 +637,23 @@ export default function OpeningDetailScreen() {
     || !!(currentNode && id && navPeek && navPeek.to.openingId === id && navPeek.to.nodeId === currentNode.id);
   const isRoot = currentNode === tree;
 
+  // Learn/Practice availability.
+  const openingColor = opening.color;
+  const totalUserMoves = (() => {
+    let n = 0;
+    function walk(node: Node) {
+      if (node.move_san !== null) {
+        const side = node.fen.split(' ')[1] === 'w' ? 'white' : 'black';
+        if (side !== openingColor) n++;
+      }
+      for (const c of node.children ?? []) walk(c);
+    }
+    walk(tree);
+    return n;
+  })();
+  const hasUnlearned = learnedNodeIds.size < totalUserMoves;
+  const hasLearned = learnedNodeIds.size > 0;
+
   return (
     <SafeAreaView className="flex-1 bg-bg-base">
       {/* Header */}
@@ -647,6 +673,20 @@ export default function OpeningDetailScreen() {
           {opening.name}
         </Text>
         {saving && <ActivityIndicator size="small" color={colorTheme.accent.default} />}
+        <Pressable
+          onPress={() => hasUnlearned && setStartMode('learn')}
+          disabled={!hasUnlearned}
+          className={`px-2 py-1 rounded-md ${hasUnlearned ? 'bg-accent/15 active:bg-accent/25' : 'bg-bg-elevated'}`}
+        >
+          <Text className={`text-xs font-medium ${hasUnlearned ? 'text-accent' : 'text-content-muted'}`}>Learn</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => hasLearned && setStartMode('practice')}
+          disabled={!hasLearned}
+          className={`px-2 py-1 rounded-md ${hasLearned ? 'bg-gold/15 active:bg-gold/25' : 'bg-bg-elevated'}`}
+        >
+          <Text className={`text-xs font-medium ${hasLearned ? 'text-gold' : 'text-content-muted'}`}>Practice</Text>
+        </Pressable>
         <Pressable
           onPress={() => { setPgnText(''); setImportError(null); setImportProgress(null); setPgnOpen(true); }}
           className="px-2 py-1 rounded-md active:bg-bg-elevated"
@@ -749,6 +789,8 @@ export default function OpeningDetailScreen() {
               root={tree}
               selectedId={selectedId}
               linkKinds={linkKinds}
+              learnedSet={learnedNodeIds}
+              userColor={openingColor}
               onSelect={selectNode}
               onLongPress={(nodeId) => {
                 const n = nodeMap.get(nodeId);
@@ -773,6 +815,117 @@ export default function OpeningDetailScreen() {
           />
         )}
       </View>
+
+      {/* Learn / Practice start dialog */}
+      <Modal
+        visible={!!startMode}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStartMode(null)}
+      >
+        {startMode && currentNode && (() => {
+          const counts = computeApplicableCounts(currentNode, openingColor, learnedNodeIds, startMode);
+          const fromHereCount = counts.get(currentNode.id) ?? 0;
+          const fromHereEnabled = fromHereCount > 0;
+          const fromRootEnabled = startMode === 'learn' ? hasUnlearned : hasLearned;
+          const isLearn = startMode === 'learn';
+          const startUrl = (fromCurrent: boolean) => ({
+            pathname: '/practice/[id]',
+            params: {
+              id,
+              mode: startMode,
+              ...(fromCurrent && currentNode.id !== tree.id ? { from: currentNode.id } : {}),
+            },
+          });
+          return (
+            <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+              <View className="bg-bg-elevated border border-border rounded-xl p-5 w-full max-w-md">
+                <Text className="text-content-primary font-semibold text-base mb-1">
+                  {isLearn ? 'Learn unlearned positions' : 'Practice learned positions'}
+                </Text>
+                <Text className="text-content-muted text-sm mb-4">Where do you want to start?</Text>
+                <View className="gap-2">
+                  <Pressable
+                    onPress={() => {
+                      setStartMode(null);
+                      router.push(startUrl(false) as any);
+                    }}
+                    disabled={!fromRootEnabled}
+                    className={`px-3 py-3 rounded-lg ${
+                      fromRootEnabled
+                        ? isLearn ? 'bg-accent/15 active:bg-accent/25' : 'bg-gold/15 active:bg-gold/25'
+                        : 'bg-bg-surface'
+                    }`}
+                  >
+                    <Text className={`text-sm font-medium ${
+                      fromRootEnabled
+                        ? isLearn ? 'text-accent' : 'text-gold'
+                        : 'text-content-muted'
+                    }`}>
+                      From beginning
+                    </Text>
+                    <Text className={`text-xs mt-0.5 ${fromRootEnabled ? (isLearn ? 'text-accent/70' : 'text-gold/70') : 'text-content-muted'}`}>
+                      Walk the entire opening
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      setStartMode(null);
+                      router.push(startUrl(true) as any);
+                    }}
+                    disabled={!fromHereEnabled}
+                    className={`px-3 py-3 rounded-lg ${
+                      fromHereEnabled
+                        ? isLearn ? 'bg-accent/15 active:bg-accent/25' : 'bg-gold/15 active:bg-gold/25'
+                        : 'bg-bg-surface'
+                    }`}
+                  >
+                    <Text className={`text-sm font-medium ${
+                      fromHereEnabled
+                        ? isLearn ? 'text-accent' : 'text-gold'
+                        : 'text-content-muted'
+                    }`}>
+                      From this position
+                    </Text>
+                    <Text className={`text-xs mt-0.5 ${fromHereEnabled ? (isLearn ? 'text-accent/70' : 'text-gold/70') : 'text-content-muted'}`}>
+                      {fromHereEnabled
+                        ? `Only the subtree below ${currentNode.move_san ?? 'the start'}`
+                        : isLearn ? 'Nothing left to learn here' : 'Nothing learned here yet'}
+                    </Text>
+                  </Pressable>
+                </View>
+                <Pressable
+                  onPress={() => setStartMode(null)}
+                  className="mt-4 py-2 rounded-lg border border-border items-center"
+                >
+                  <Text className="text-content-secondary text-sm">Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          );
+        })()}
+      </Modal>
+
+      {/* Delete-blocked dialog */}
+      <Modal
+        visible={!!deleteBlocked}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteBlocked(null)}
+      >
+        <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+          <View className="bg-bg-elevated border border-border rounded-xl p-5 w-full max-w-sm">
+            <Text className="text-content-primary font-semibold text-base mb-2">Can't delete this branch</Text>
+            <Text className="text-content-secondary text-sm mb-4">{deleteBlocked}</Text>
+            <Pressable
+              onPress={() => setDeleteBlocked(null)}
+              className="py-2 rounded-lg bg-accent/15 active:bg-accent/25 items-center"
+            >
+              <Text className="text-accent text-sm font-medium">OK</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       {/* Choice modal */}
       <Modal

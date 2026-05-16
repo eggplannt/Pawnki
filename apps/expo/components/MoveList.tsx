@@ -119,12 +119,14 @@ interface MoveCellProps {
   isWhite: boolean;
   selected: boolean;
   linkKind: 'none' | 'intra' | 'cross';
+  /** 'none' = not a user-move (no dot), 'learned' / 'unlearned' = dot color. */
+  learnedKind: 'none' | 'learned' | 'unlearned';
   onSelect: (id: string) => void;
   onLongPress?: (id: string) => void;
 }
 
 const MoveCell = memo(function MoveCell({
-  id, san, isWhite, selected, linkKind, onSelect, onLongPress,
+  id, san, isWhite, selected, linkKind, learnedKind, onSelect, onLongPress,
 }: MoveCellProps) {
   const handlePress = useCallback(() => onSelect(id), [onSelect, id]);
   const handleLongPress = useCallback(() => onLongPress?.(id), [onLongPress, id]);
@@ -157,6 +159,18 @@ const MoveCell = memo(function MoveCell({
       >
         {san}
       </Text>
+      {learnedKind !== 'none' && (
+        <View
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: 5,
+            marginLeft: 4,
+            backgroundColor: learnedKind === 'learned' ? colorTheme.accent.default : colorTheme.content.muted,
+            opacity: learnedKind === 'learned' ? 1 : 0.5,
+          }}
+        />
+      )}
       {linkKind !== 'none' && (
         <Text
           style={{
@@ -180,12 +194,14 @@ interface RowProps {
   blackSelected: boolean;
   whiteLinkKind: 'none' | 'intra' | 'cross';
   blackLinkKind: 'none' | 'intra' | 'cross';
+  whiteLearnedKind: 'none' | 'learned' | 'unlearned';
+  blackLearnedKind: 'none' | 'learned' | 'unlearned';
   onSelect: (id: string) => void;
   onLongPress?: (id: string) => void;
 }
 
 const Row = memo(function Row({
-  row, whiteSelected, blackSelected, whiteLinkKind, blackLinkKind, onSelect, onLongPress,
+  row, whiteSelected, blackSelected, whiteLinkKind, blackLinkKind, whiteLearnedKind, blackLearnedKind, onSelect, onLongPress,
 }: RowProps) {
   const isVariation = row.depth > 0;
   return (
@@ -219,6 +235,7 @@ const Row = memo(function Row({
           isWhite
           selected={whiteSelected}
           linkKind={whiteLinkKind}
+          learnedKind={whiteLearnedKind}
           onSelect={onSelect}
           onLongPress={onLongPress}
         />
@@ -242,6 +259,7 @@ const Row = memo(function Row({
           isWhite={false}
           selected={blackSelected}
           linkKind={blackLinkKind}
+          learnedKind={blackLearnedKind}
           onSelect={onSelect}
           onLongPress={onLongPress}
         />
@@ -257,12 +275,16 @@ interface MoveListProps {
   selectedId: string | null;
   /** Map of node id → kind of link. Nodes not in the map are unlinked. */
   linkKinds?: Map<string, 'intra' | 'cross'>;
+  /** Set of node ids that are user-move nodes that have been learned. */
+  learnedSet?: Set<string>;
+  /** Opening color so we can decide which nodes are user-moves. */
+  userColor?: 'white' | 'black';
   onSelect: (id: string) => void;
   onLongPress?: (id: string) => void;
 }
 
 export const MoveList = memo(function MoveList({
-  root, selectedId, linkKinds, onSelect, onLongPress,
+  root, selectedId, linkKinds, learnedSet, userColor, onSelect, onLongPress,
 }: MoveListProps) {
   const rows = useMemo(() => flattenTree(root), [root]);
 
@@ -294,18 +316,29 @@ export const MoveList = memo(function MoveList({
   }, [selectedId, idToIndex]);
 
   const renderItem = useCallback(
-    ({ item }: ListRenderItemInfo<MoveRow>) => (
-      <Row
-        row={item}
-        whiteSelected={!!item.whiteId && item.whiteId === selectedId}
-        blackSelected={!!item.blackId && item.blackId === selectedId}
-        whiteLinkKind={item.whiteId ? (linkKinds?.get(item.whiteId) ?? 'none') : 'none'}
-        blackLinkKind={item.blackId ? (linkKinds?.get(item.blackId) ?? 'none') : 'none'}
-        onSelect={onSelect}
-        onLongPress={onLongPress}
-      />
-    ),
-    [selectedId, onSelect, onLongPress, linkKinds],
+    ({ item }: ListRenderItemInfo<MoveRow>) => {
+      function learnedKind(nodeId?: string, isWhitePiece?: boolean): 'none' | 'learned' | 'unlearned' {
+        if (!nodeId || !userColor) return 'none';
+        // Node represents a move played by white iff isWhitePiece is true.
+        const moveWasUserColor = isWhitePiece ? userColor === 'white' : userColor === 'black';
+        if (!moveWasUserColor) return 'none';
+        return learnedSet?.has(nodeId) ? 'learned' : 'unlearned';
+      }
+      return (
+        <Row
+          row={item}
+          whiteSelected={!!item.whiteId && item.whiteId === selectedId}
+          blackSelected={!!item.blackId && item.blackId === selectedId}
+          whiteLinkKind={item.whiteId ? (linkKinds?.get(item.whiteId) ?? 'none') : 'none'}
+          blackLinkKind={item.blackId ? (linkKinds?.get(item.blackId) ?? 'none') : 'none'}
+          whiteLearnedKind={learnedKind(item.whiteId, true)}
+          blackLearnedKind={learnedKind(item.blackId, false)}
+          onSelect={onSelect}
+          onLongPress={onLongPress}
+        />
+      );
+    },
+    [selectedId, onSelect, onLongPress, linkKinds, learnedSet, userColor],
   );
 
   const keyExtractor = useCallback((item: MoveRow) => item.key, []);

@@ -164,6 +164,19 @@ export async function createNode(
   return data as Node;
 }
 
+export class CrossLinkDeleteError extends Error {
+  blockingOpenings: string[];
+  constructor(openings: string[]) {
+    super(
+      openings.length === 1
+        ? `"${openings[0]}" links to a position in this branch. Unlink or absorb it first.`
+        : `${openings.length} other openings link to positions in this branch. Unlink or absorb them first.`,
+    );
+    this.name = 'CrossLinkDeleteError';
+    this.blockingOpenings = openings;
+  }
+}
+
 export async function deleteSubtree(nodeId: string, openingId: string) {
   const allNodes = await getNodes(openingId);
   const subtreeIds = new Set<string>();
@@ -177,15 +190,29 @@ export async function deleteSubtree(nodeId: string, openingId: string) {
 
   const { data: linkRows } = await supabase
     .from('nodes')
-    .select('id, opening_id, sort_order, transposes_to_node_id')
+    .select('id, opening_id, sort_order, transposes_to_node_id, openings(name)')
     .in('transposes_to_node_id', [...subtreeIds]);
 
-  const linksToRoot = (linkRows ?? [])
-    .filter((a) => a.transposes_to_node_id === nodeId)
-    .sort((a, b) => a.sort_order - b.sort_order);
+  const crossLinks = (linkRows ?? []).filter((r) => r.opening_id !== openingId);
+  if (crossLinks.length > 0) {
+    const names = Array.from(new Set(crossLinks.map((r) => (r as any).openings?.name).filter(Boolean)));
+    throw new CrossLinkDeleteError(names);
+  }
 
-  if (linksToRoot.length > 0 && linksToRoot[0].opening_id === openingId) {
-    const promoted = linksToRoot[0];
+  const intraLinks = (linkRows ?? []).filter((r) => r.opening_id === openingId);
+  const intraToRoot = intraLinks
+    .filter((r) => r.transposes_to_node_id === nodeId)
+    .sort((a, b) => a.sort_order - b.sort_order);
+  const intraToNonRoot = intraLinks.filter((r) => r.transposes_to_node_id !== nodeId);
+
+  if (intraToNonRoot.length > 0) {
+    throw new Error(
+      'This branch contains nodes that other moves in this opening link to. Re-route those links first.',
+    );
+  }
+
+  if (intraToRoot.length > 0) {
+    const promoted = intraToRoot[0];
     await makeCanonical(openingId, promoted.id, nodeId);
     const { error } = await supabase.from('nodes').delete().eq('id', nodeId);
     if (error) throw error;
