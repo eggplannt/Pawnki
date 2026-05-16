@@ -104,10 +104,6 @@ function diffPositions(oldFen: string, newFen: string): PieceMove[] {
   return moves;
 }
 
-interface ActiveMove extends PieceMove {
-  anim: Animated.Value;
-}
-
 export interface ChessboardMove {
   san: string;
   uci: string;
@@ -136,12 +132,20 @@ export const Chessboard = memo(function Chessboard({
 }: ChessboardProps) {
   // What's currently rendered on the board (may lag `fen` while animating).
   const [displayedFen, setDisplayedFen] = useState(fen);
-  const [animations, setAnimations] = useState<ActiveMove[]>([]);
+  const [animations, setAnimations] = useState<PieceMove[]>([]);
   const [boardSize, setBoardSize] = useState(0);
   const squareSize = boardSize / 8;
 
+  // A single shared progress value (0→1) drives every in-flight piece via
+  // interpolation. Using one persistent Animated.Value (vs creating a new one
+  // per move) keeps the native binding stable across renders and avoids the
+  // "start() before view is mounted" race that causes the no-animation flicker.
+  const progress = useRef(new Animated.Value(0)).current;
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
+  const fenRef = useRef(fen);
+  fenRef.current = fen;
 
+  // Detect fen change → create overlay pieces.
   useEffect(() => {
     if (fen === displayedFen) return;
 
@@ -157,6 +161,7 @@ export const Chessboard = memo(function Chessboard({
     if (animationRef.current) {
       animationRef.current.stop();
       animationRef.current = null;
+      progress.setValue(0);
       setAnimations([]);
       setDisplayedFen(fen);
       return;
@@ -168,28 +173,43 @@ export const Chessboard = memo(function Chessboard({
       return;
     }
 
-    const active: ActiveMove[] = moves.map((m) => ({ ...m, anim: new Animated.Value(0) }));
-    setAnimations(active);
+    progress.setValue(0);
+    setAnimations(moves);
+  }, [fen, displayedFen, squareSize, progress]);
 
-    const composite = Animated.parallel(
-      active.map((m) =>
-        Animated.timing(m.anim, {
-          toValue: 1,
-          duration: ANIMATION_MS,
-          useNativeDriver: true,
-        }),
-      ),
-    );
-    animationRef.current = composite;
+  // Once the overlay Animated.Views are committed (and their interpolations
+  // are bound to the native driver), drive the shared progress value. The
+  // requestAnimationFrame defers start() by one frame so the native binding
+  // is guaranteed to be in place — without it useNativeDriver can snap the
+  // value to its end state on the very first frame.
+  useEffect(() => {
+    if (animations.length === 0) return;
+    if (animationRef.current) return;
 
-    composite.start(({ finished }) => {
-      if (finished && animationRef.current === composite) {
-        setDisplayedFen(fen);
-        setAnimations([]);
-        animationRef.current = null;
-      }
+    let cancelled = false;
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return;
+      const anim = Animated.timing(progress, {
+        toValue: 1,
+        duration: ANIMATION_MS,
+        useNativeDriver: true,
+      });
+      animationRef.current = anim;
+
+      anim.start(({ finished }) => {
+        if (finished && animationRef.current === anim) {
+          setDisplayedFen(fenRef.current);
+          setAnimations([]);
+          animationRef.current = null;
+        }
+      });
     });
-  }, [fen, displayedFen, squareSize]);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [animations, progress]);
 
   const displayBoard = useMemo(() => parseFen(displayedFen), [displayedFen]);
   const sideToMove = fen.split(' ')[1] === 'w' ? 'w' : 'b';
@@ -332,8 +352,8 @@ export const Chessboard = memo(function Chessboard({
               justifyContent: 'center',
               zIndex: 10,
               transform: [
-                { translateX: m.anim.interpolate({ inputRange: [0, 1], outputRange: [0, dx] }) },
-                { translateY: m.anim.interpolate({ inputRange: [0, 1], outputRange: [0, dy] }) },
+                { translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [0, dx] }) },
+                { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [0, dy] }) },
               ],
             }}
           >
