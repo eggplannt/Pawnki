@@ -1,5 +1,7 @@
 import { supabase } from './supabase';
-import { parsePgn, type PgnNode } from './pgn-tree';
+import { parsePgn, positionKey, type PgnNode } from './pgn-tree';
+
+export { positionKey } from './pgn-tree';
 import type { Opening, Node } from '@/types';
 
 // ── Openings ────────────────────────────────────────────────────────────────
@@ -19,6 +21,17 @@ export async function listOpenings() {
       dueCount: number;
     };
   });
+}
+
+export async function getOpening(id: string) {
+  const { data, error } = await supabase
+    .from('openings')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (error) throw error;
+  return data as Opening;
 }
 
 export interface ImportProgress {
@@ -57,6 +70,21 @@ export async function createOpening(
   }
 
   return opening as Opening;
+}
+
+export async function updateOpening(
+  id: string,
+  updates: { name?: string; description?: string | null },
+) {
+  const { data, error } = await supabase
+    .from('openings')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Opening;
 }
 
 export async function deleteOpening(id: string) {
@@ -138,21 +166,36 @@ export async function createNode(
 
 export async function deleteSubtree(nodeId: string, openingId: string) {
   const allNodes = await getNodes(openingId);
-  const idsToDelete = new Set<string>();
-
+  const subtreeIds = new Set<string>();
   function collectIds(id: string) {
-    idsToDelete.add(id);
+    subtreeIds.add(id);
     for (const n of allNodes) {
       if (n.parent_id === id) collectIds(n.id);
     }
   }
   collectIds(nodeId);
 
+  const { data: linkRows } = await supabase
+    .from('nodes')
+    .select('id, opening_id, sort_order, transposes_to_node_id')
+    .in('transposes_to_node_id', [...subtreeIds]);
+
+  const linksToRoot = (linkRows ?? [])
+    .filter((a) => a.transposes_to_node_id === nodeId)
+    .sort((a, b) => a.sort_order - b.sort_order);
+
+  if (linksToRoot.length > 0 && linksToRoot[0].opening_id === openingId) {
+    const promoted = linksToRoot[0];
+    await makeCanonical(openingId, promoted.id, nodeId);
+    const { error } = await supabase.from('nodes').delete().eq('id', nodeId);
+    if (error) throw error;
+    return;
+  }
+
   const { error } = await supabase
     .from('nodes')
     .delete()
-    .in('id', [...idsToDelete]);
-
+    .in('id', [...subtreeIds]);
   if (error) throw error;
 }
 
@@ -165,22 +208,42 @@ export async function updateNodeAnnotation(nodeId: string, annotation: string | 
   if (error) throw error;
 }
 
-/**
- * Check if a FEN exists in another opening, but only if the parent FEN
- * does NOT also exist in that same opening (i.e. this is the first point
- * of convergence, not a common shared trunk position).
- */
+function resolveCanonicalId(node: Pick<Node, 'id' | 'transposes_to_node_id'>, all: Map<string, Node>): string {
+  let cur: Pick<Node, 'id' | 'transposes_to_node_id'> | undefined = node;
+  const seen = new Set<string>();
+  while (cur && cur.transposes_to_node_id && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    cur = all.get(cur.transposes_to_node_id);
+  }
+  return cur?.id ?? node.id;
+}
+
+export interface CrossTranspositionMatch {
+  canonicalNodeId: string;
+  openingId: string;
+  openingName: string;
+  openingColor: 'white' | 'black';
+}
+
+export interface IntraTranspositionMatch {
+  canonicalNodeId: string;
+  moveSan: string | null;
+}
+
 export async function findTransposition(
   fen: string,
   parentFen: string,
   excludeOpeningId: string,
-): Promise<{ openingName: string; openingId: string } | null> {
+): Promise<CrossTranspositionMatch | null> {
+  const key = positionKey(fen);
+  const parentKey = positionKey(parentFen);
+
   const { data, error } = await supabase
     .from('nodes')
-    .select('id, opening_id, openings(id, name)')
-    .eq('fen', fen)
+    .select('id, opening_id, transposes_to_node_id, openings(id, name, color)')
+    .eq('position_key', key)
     .neq('opening_id', excludeOpeningId)
-    .limit(5);
+    .limit(10);
 
   if (error || !data || data.length === 0) return null;
 
@@ -189,56 +252,225 @@ export async function findTransposition(
     const { data: parentMatch } = await supabase
       .from('nodes')
       .select('id')
-      .eq('fen', parentFen)
+      .eq('position_key', parentKey)
       .eq('opening_id', otherOpeningId)
       .limit(1);
 
-    if (!parentMatch || parentMatch.length === 0) {
-      const opening = (row as any).openings;
-      if (opening) return { openingName: opening.name, openingId: opening.id };
+    if (parentMatch && parentMatch.length > 0) continue;
+
+    const opening = (row as any).openings;
+    if (!opening) continue;
+
+    let canonicalId = row.id as string;
+    if (row.transposes_to_node_id) {
+      const { data: targetRow } = await supabase
+        .from('nodes')
+        .select('id')
+        .eq('id', row.transposes_to_node_id)
+        .single();
+      if (targetRow) canonicalId = targetRow.id;
     }
+
+    return {
+      canonicalNodeId: canonicalId,
+      openingId: opening.id,
+      openingName: opening.name,
+      openingColor: opening.color,
+    };
   }
 
   return null;
 }
 
-/**
- * Check if a FEN already exists elsewhere in the same opening
- * (reached via a different move order).
- */
 export async function findIntraOpeningTransposition(
   fen: string,
   openingId: string,
-  excludeParentId: string,
-): Promise<{ nodeId: string; moveSan: string | null } | null> {
+  excludeNodeId: string,
+): Promise<IntraTranspositionMatch | null> {
   const { data, error } = await supabase
     .from('nodes')
-    .select('id, move_san, parent_id')
-    .eq('fen', fen)
-    .eq('opening_id', openingId)
-    .limit(5);
+    .select('id, move_san, parent_id, transposes_to_node_id')
+    .eq('position_key', positionKey(fen))
+    .eq('opening_id', openingId);
 
   if (error || !data) return null;
 
-  const match = data.find((n) => n.parent_id !== excludeParentId);
-  if (!match) return null;
+  const lookup = new Map<string, Node>();
+  for (const n of data) lookup.set(n.id, n as Node);
 
-  return { nodeId: match.id, moveSan: match.move_san };
+  const candidates = data.filter((n) => n.id !== excludeNodeId);
+  if (candidates.length === 0) return null;
+
+  const canonical = candidates.find((n) => !n.transposes_to_node_id);
+  const pick = canonical ?? candidates[0];
+  const canonicalId = resolveCanonicalId(pick, lookup);
+
+  return { canonicalNodeId: canonicalId, moveSan: pick.move_san };
+}
+
+export async function getTranspositionTargets(
+  targetIds: string[],
+): Promise<Map<string, { node: Node; openingId: string; openingName: string; openingColor: 'white' | 'black' }>> {
+  const out = new Map<string, { node: Node; openingId: string; openingName: string; openingColor: 'white' | 'black' }>();
+  if (targetIds.length === 0) return out;
+
+  const { data, error } = await supabase
+    .from('nodes')
+    .select('*, openings(id, name, color)')
+    .in('id', targetIds);
+  if (error || !data) return out;
+
+  for (const row of data) {
+    const opening = (row as any).openings;
+    if (!opening) continue;
+    out.set(row.id, {
+      node: row as Node,
+      openingId: opening.id,
+      openingName: opening.name,
+      openingColor: opening.color,
+    });
+  }
+  return out;
+}
+
+export async function linkNode(linkNodeId: string, canonicalNodeId: string) {
+  const { error } = await supabase
+    .from('nodes')
+    .update({ transposes_to_node_id: canonicalNodeId })
+    .eq('id', linkNodeId);
+  if (error) throw error;
+}
+
+export async function unlinkNode(linkNodeId: string) {
+  const { error } = await supabase
+    .from('nodes')
+    .update({ transposes_to_node_id: null })
+    .eq('id', linkNodeId);
+  if (error) throw error;
+}
+
+export async function unlinkAndPromote(
+  nodeId: string,
+  openingId: string,
+  positionKeyValue: string,
+) {
+  await unlinkNode(nodeId);
+
+  const { data: duplicates, error } = await supabase
+    .from('nodes')
+    .select('id')
+    .eq('opening_id', openingId)
+    .eq('position_key', positionKeyValue)
+    .neq('id', nodeId);
+  if (error) throw error;
+
+  const dupIds = (duplicates ?? []).map((r) => r.id);
+  if (dupIds.length === 0) return;
+
+  const { error: repointErr } = await supabase
+    .from('nodes')
+    .update({ transposes_to_node_id: nodeId })
+    .in('id', dupIds);
+  if (repointErr) throw repointErr;
+}
+
+export async function absorbCrossCanonical(
+  newCanonicalId: string,
+  oldCanonicalId: string,
+  newOpeningId: string,
+) {
+  const allDescendantIds: string[] = [];
+  let frontier = [oldCanonicalId];
+  while (frontier.length > 0) {
+    const { data, error } = await supabase
+      .from('nodes')
+      .select('id')
+      .in('parent_id', frontier);
+    if (error) throw error;
+    const ids = (data ?? []).map((r) => r.id);
+    if (ids.length === 0) break;
+    allDescendantIds.push(...ids);
+    frontier = ids;
+  }
+
+  if (allDescendantIds.length > 0) {
+    const { error: oidErr } = await supabase
+      .from('nodes')
+      .update({ opening_id: newOpeningId })
+      .in('id', allDescendantIds);
+    if (oidErr) throw oidErr;
+  }
+
+  const { data: directChildren, error: childErr } = await supabase
+    .from('nodes')
+    .select('id')
+    .eq('parent_id', oldCanonicalId);
+  if (childErr) throw childErr;
+  if (directChildren && directChildren.length > 0) {
+    const { error: reparentErr } = await supabase
+      .from('nodes')
+      .update({ parent_id: newCanonicalId })
+      .in('id', directChildren.map((r) => r.id));
+    if (reparentErr) throw reparentErr;
+  }
+
+  const { error: repointErr } = await supabase
+    .from('nodes')
+    .update({ transposes_to_node_id: newCanonicalId })
+    .eq('transposes_to_node_id', oldCanonicalId);
+  if (repointErr) throw repointErr;
+
+  await linkNode(oldCanonicalId, newCanonicalId);
+}
+
+export async function makeCanonical(
+  _openingId: string,
+  newCanonicalId: string,
+  oldCanonicalId: string,
+) {
+  const { data: childRows, error: childErr } = await supabase
+    .from('nodes')
+    .select('id')
+    .eq('parent_id', oldCanonicalId);
+  if (childErr) throw childErr;
+
+  if (childRows && childRows.length > 0) {
+    const ids = childRows.map((r) => r.id);
+    const { error: reparentErr } = await supabase
+      .from('nodes')
+      .update({ parent_id: newCanonicalId })
+      .in('id', ids);
+    if (reparentErr) throw reparentErr;
+  }
+
+  const { error: repointErr } = await supabase
+    .from('nodes')
+    .update({ transposes_to_node_id: newCanonicalId })
+    .eq('transposes_to_node_id', oldCanonicalId);
+  if (repointErr) throw repointErr;
+
+  await linkNode(oldCanonicalId, newCanonicalId);
 }
 
 // ── PGN Import ──────────────────────────────────────────────────────────────
 
-/**
- * Import PGN into an opening, merging with existing nodes.
- * If the opening already has a tree, new moves are merged in —
- * existing positions are reused, only new branches are inserted.
- * If the opening is empty, a fresh tree is created.
- */
+export interface ImportOptions {
+  autoLinkTranspositions?: boolean;
+}
+
+export interface ImportResult {
+  transpositionLinks: { linkNodeId: string; canonicalNodeId: string }[];
+}
+
 export async function importPgnToOpening(
   openingId: string,
   pgn: string,
   onProgress?: (p: ImportProgress) => void,
-) {
+  options: ImportOptions = {},
+): Promise<ImportResult> {
+  const autoLink = options.autoLinkTranspositions ?? true;
+  const transpositionLinks: { linkNodeId: string; canonicalNodeId: string }[] = [];
+
   onProgress?.({ phase: 'parsing', current: 0, total: 0 });
   const pgnTree = parsePgn(pgn);
 
@@ -250,10 +482,21 @@ export async function importPgnToOpening(
   const existingTree = buildTree(existingNodes);
 
   const childByFen = new Map<string, Map<string, Node>>();
+  const globalByKey = new Map<string, string>();
+
+  function rememberCanonical(id: string, posKey: string, linkTarget: string | null) {
+    if (linkTarget) {
+      globalByKey.set(posKey, linkTarget);
+    } else if (!globalByKey.has(posKey)) {
+      globalByKey.set(posKey, id);
+    }
+  }
+
   function indexExisting(node: Node) {
+    rememberCanonical(node.id, node.position_key, node.transposes_to_node_id);
     const childMap = new Map<string, Node>();
     for (const child of node.children ?? []) {
-      childMap.set(child.fen, child);
+      childMap.set(child.position_key, child);
       indexExisting(child);
     }
     childByFen.set(node.id, childMap);
@@ -284,37 +527,27 @@ export async function importPgnToOpening(
         annotation: pgnTree.annotation,
         sort_order: sortOrder,
       })
-      .select()
+      .select('*')
       .single();
 
     if (rootErr) throw rootErr;
     rootDbId = rootRow.id;
     childByFen.set(rootDbId, new Map());
+    rememberCanonical(rootRow.id, rootRow.position_key, null);
   }
 
   let inserted = 0;
   onProgress?.({ phase: 'importing', current: 0, total: totalNew });
 
-  async function walkAndMerge(pgnNode: PgnNode, parentDbId: string) {
-    for (const pgnChild of pgnNode.children) {
-      const parentChildren = childByFen.get(parentDbId);
-      const existingChild = parentChildren?.get(pgnChild.fen);
-
-      if (existingChild) {
-        inserted++;
-        onProgress?.({ phase: 'importing', current: inserted, total: totalNew });
-        await walkAndMerge(pgnChild, existingChild.id);
-      } else {
-        await insertSubtree(pgnChild, parentDbId, openingId);
-      }
-    }
-  }
-
-  async function insertSubtree(pgnNode: PgnNode, parentDbId: string, opId: string) {
+  async function insertOne(
+    pgnNode: PgnNode,
+    parentDbId: string,
+    linkTo: string | null,
+  ): Promise<{ id: string; isLink: boolean; posKey: string }> {
     const { data: maxRow } = await supabase
       .from('nodes')
       .select('sort_order')
-      .eq('opening_id', opId)
+      .eq('opening_id', openingId)
       .order('sort_order', { ascending: false })
       .limit(1)
       .single();
@@ -323,26 +556,65 @@ export async function importPgnToOpening(
     const { data: row, error } = await supabase
       .from('nodes')
       .insert({
-        opening_id: opId,
+        opening_id: openingId,
         parent_id: parentDbId,
         fen: pgnNode.fen,
         move_san: pgnNode.move_san,
         move_uci: pgnNode.move_uci,
         annotation: pgnNode.annotation,
         sort_order: sortOrder,
+        transposes_to_node_id: linkTo,
       })
-      .select()
+      .select('*')
       .single();
-
     if (error) throw error;
 
     inserted++;
     onProgress?.({ phase: 'importing', current: inserted, total: totalNew });
 
+    const parentMap = childByFen.get(parentDbId);
+    if (parentMap) parentMap.set(row.position_key, row as Node);
+    childByFen.set(row.id, new Map());
+    rememberCanonical(row.id, row.position_key, row.transposes_to_node_id);
+
+    return { id: row.id, isLink: !!linkTo, posKey: row.position_key };
+  }
+
+  async function insertSubtree(pgnNode: PgnNode, parentDbId: string) {
+    const posKey = positionKey(pgnNode.fen);
+    const existingCanonical = globalByKey.get(posKey);
+
+    if (existingCanonical) {
+      const result = await insertOne(pgnNode, parentDbId, existingCanonical);
+      if (!autoLink) {
+        transpositionLinks.push({ linkNodeId: result.id, canonicalNodeId: existingCanonical });
+      }
+      return;
+    }
+
+    const created = await insertOne(pgnNode, parentDbId, null);
     for (const child of pgnNode.children) {
-      await insertSubtree(child, row.id, opId);
+      await insertSubtreeOrMerge(child, created.id);
     }
   }
 
-  await walkAndMerge(pgnTree, rootDbId);
+  async function insertSubtreeOrMerge(pgnNode: PgnNode, parentDbId: string) {
+    const parentChildren = childByFen.get(parentDbId);
+    const existingChild = parentChildren?.get(positionKey(pgnNode.fen));
+    if (existingChild) {
+      inserted++;
+      onProgress?.({ phase: 'importing', current: inserted, total: totalNew });
+      for (const child of pgnNode.children) {
+        await insertSubtreeOrMerge(child, existingChild.id);
+      }
+      return;
+    }
+    await insertSubtree(pgnNode, parentDbId);
+  }
+
+  for (const pgnChild of pgnTree.children) {
+    await insertSubtreeOrMerge(pgnChild, rootDbId);
+  }
+
+  return { transpositionLinks };
 }

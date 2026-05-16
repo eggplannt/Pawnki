@@ -1,7 +1,10 @@
 import '../global.css';
+import 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { useEffect } from 'react';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
+import { NavHistoryProvider } from '@/hooks/useNavHistory';
 
 function AuthGate() {
   const { user, loading } = useAuth();
@@ -21,15 +24,19 @@ function AuthGate() {
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <AuthGate />
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
-        <Stack.Screen name="(auth)" />
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="auth/callback" />
-        <Stack.Screen name="opening/[id]" />
-      </Stack>
-    </AuthProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <AuthProvider>
+        <NavHistoryProvider>
+          <AuthGate />
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="index" />
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="auth/callback" />
+            <Stack.Screen name="opening/[id]" />
+          </Stack>
+        </NavHistoryProvider>
+      </AuthProvider>
+    </GestureHandlerRootView>
   );
 }

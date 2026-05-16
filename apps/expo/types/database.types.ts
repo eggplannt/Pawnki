@@ -44,7 +44,9 @@ export type Database = {
           move_uci: string | null
           opening_id: string
           parent_id: string | null
+          position_key: string
           sort_order: number
+          transposes_to_node_id: string | null
         }
         Insert: {
           annotation?: string | null
@@ -56,6 +58,7 @@ export type Database = {
           opening_id: string
           parent_id?: string | null
           sort_order?: number
+          transposes_to_node_id?: string | null
         }
         Update: {
           annotation?: string | null
@@ -67,6 +70,7 @@ export type Database = {
           opening_id?: string
           parent_id?: string | null
           sort_order?: number
+          transposes_to_node_id?: string | null
         }
         Relationships: [
           {
@@ -79,6 +83,13 @@ export type Database = {
           {
             foreignKeyName: "nodes_parent_id_fkey"
             columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "nodes_transposes_to_node_id_fkey"
+            columns: ["transposes_to_node_id"]
             isOneToOne: false
             referencedRelation: "nodes"
             referencedColumns: ["id"]
