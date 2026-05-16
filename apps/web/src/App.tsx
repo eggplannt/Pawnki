@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { ThemeContext, useThemeProvider } from '@/hooks/useColorTheme';
+import { NavHistoryProvider } from '@/hooks/useNavHistory';
 import Login from '@/pages/Login';
 import Library from '@/pages/Library';
 import Review from '@/pages/Review';
@@ -107,7 +108,9 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <AppRoutes />
+        <NavHistoryProvider>
+          <AppRoutes />
+        </NavHistoryProvider>
       </AuthProvider>
     </ThemeProvider>
   );

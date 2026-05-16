@@ -1,5 +1,6 @@
-import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import { AppShell } from '@/components/AppShell';
@@ -7,8 +8,11 @@ import {
   getOpening, getNodes, buildTree,
   createNode, deleteSubtree, updateNodeAnnotation,
   findTransposition, findIntraOpeningTransposition,
+  linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical, getTranspositionTargets, positionKey,
   importPgnToOpening,
   type ImportProgress,
+  type CrossTranspositionMatch,
+  type IntraTranspositionMatch,
 } from '@/lib/openings';
 import { useColorTheme } from '@/hooks/useColorTheme';
 import type { Opening, Node } from '@/types';
@@ -49,6 +53,14 @@ function findNodeById(root: Node, id: string): Node | null {
     if (found) return found;
   }
   return null;
+}
+
+function countDescendants(node: Node): number {
+  let n = 0;
+  for (const c of node.children ?? []) {
+    n += 1 + countDescendants(c);
+  }
+  return n;
 }
 
 // Defense-in-depth boundary so any future chessboard render error doesn't
@@ -96,10 +108,22 @@ function getLegalMoveSquares(fen: string, sourceSquare: string): string[] {
   }
 }
 
+// ── Move-tree context ──────────────────────────────────────────────────────
+// Threads link-target info to MoveButton without prop drilling. Keyed by
+// the target node id (the canonical's id), matching what transposes_to_node_id
+// points at.
+type LinkTargetInfo = { node: Node; openingId: string; openingName: string; openingColor: 'white' | 'black' };
+const LinkTargetsContext = createContext<Map<string, LinkTargetInfo>>(new Map());
+
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export default function OpeningDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navHistory = useNavHistory();
+  // Cross-opening switch confirmation. When non-null, modal is shown.
+  const [crossSwitch, setCrossSwitch] = useState<{ target: LinkTargetInfo; fromLinkId: string } | null>(null);
   const [opening, setOpening] = useState<Opening | null>(null);
   const [tree, setTree] = useState<Node | null>(null);
   const [currentNode, setCurrentNode] = useState<Node | null>(null);
@@ -115,27 +139,69 @@ export default function OpeningDetail() {
   const [editingAnnotation, setEditingAnnotation] = useState(false);
   const [annotationDraft, setAnnotationDraft] = useState('');
 
-  const [transpositionInfo, setTranspositionInfo] = useState<{
-    type: 'cross-opening';
-    openingName: string;
-    openingId: string;
-  } | {
-    type: 'intra-opening';
-    moveSan: string | null;
+  // Active choice modal triggered after a move arrives at an existing position
+  // OR when the user re-prompts the decision on a link/canonical node.
+  // `newNodeId` is the node we're deciding what to do with (freshly inserted
+  // for create-time, or an existing link for re-prompt).
+  const [transChoice, setTransChoice] = useState<{
+    newNodeId: string;
+    intra: IntraTranspositionMatch | null;
+    cross: CrossTranspositionMatch | null;
+    isReprompt: boolean;
   } | null>(null);
+  const [confirmCanonical, setConfirmCanonical] = useState(false);
+
+  // Resolved targets for every link node in this opening — target-id → info.
+  const [transTargets, setTransTargets] = useState<Map<string, LinkTargetInfo>>(new Map());
+  const [showTransPanel, setShowTransPanel] = useState(false);
 
   const [showPgnImport, setShowPgnImport] = useState(false);
   const [pgnText, setPgnText] = useState('');
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [autoLinkPgn, setAutoLinkPgn] = useState(true);
+  const [importTranspositionCount, setImportTranspositionCount] = useState<number | null>(null);
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: Node } | null>(null);
 
   const parentMap = useMemo(() => (tree ? buildParentMap(tree) : new Map<string, Node>()), [tree]);
 
+  // Collect every link node in the current tree.
+  const linkEntries = useMemo(() => {
+    const out: { linkId: string; targetId: string; node: Node }[] = [];
+    function walk(n: Node) {
+      if (n.transposes_to_node_id) out.push({ linkId: n.id, targetId: n.transposes_to_node_id, node: n });
+      for (const c of n.children ?? []) walk(c);
+    }
+    if (tree) walk(tree);
+    return out;
+  }, [tree]);
+
+  // Whenever links change, refresh the target info (one batched fetch).
+  useEffect(() => {
+    const targetIds = [...new Set(linkEntries.map((a) => a.targetId))];
+    if (targetIds.length === 0) {
+      setTransTargets(new Map());
+      return;
+    }
+    let cancelled = false;
+    getTranspositionTargets(targetIds).then((m) => {
+      if (!cancelled) setTransTargets(m);
+    });
+    return () => { cancelled = true; };
+  }, [linkEntries]);
+
   useEffect(() => {
     if (!id) return;
-    loadData(id);
+    const nodeParam = searchParams.get('node') ?? undefined;
+    loadData(id, nodeParam);
+    if (nodeParam) {
+      // Clear the deep-link param so it doesn't re-fire on reload.
+      const next = new URLSearchParams(searchParams);
+      next.delete('node');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   async function loadData(openingId: string, navigateToId?: string) {
@@ -195,7 +261,34 @@ export default function OpeningDetail() {
   }, [currentNode]);
 
   const goNext = useCallback(() => {
-    if (!currentNode) return;
+    if (!currentNode || !id) return;
+
+    // If the current node is a transposition link, follow it.
+    if (currentNode.transposes_to_node_id) {
+      const target = transTargets.get(currentNode.transposes_to_node_id);
+      if (target) {
+        if (target.openingId === id) {
+          // Intra-opening: jump straight to the canonical (branching) node.
+          navHistory.push({
+            from: { openingId: id, nodeId: currentNode.id },
+            to: { openingId: id, nodeId: target.node.id },
+          });
+          if (tree) {
+            const targetInTree = findNodeById(tree, target.node.id);
+            if (targetInTree) {
+              setCurrentNode(targetInTree);
+              setForwardStack([]);
+              return;
+            }
+          }
+        } else {
+          // Cross-opening: confirm before switching openings.
+          setCrossSwitch({ target, fromLinkId: currentNode.id });
+          return;
+        }
+      }
+    }
+
     if (forwardStack.length > 0) {
       let idx = -1;
       for (let i = forwardStack.length - 1; i >= 0; i--) {
@@ -211,13 +304,35 @@ export default function OpeningDetail() {
       setCurrentNode(currentNode.children[0]);
       setForwardStack([]);
     }
-  }, [currentNode, forwardStack, parentMap]);
+  }, [currentNode, forwardStack, parentMap, transTargets, id, tree, navHistory]);
 
   const goPrev = useCallback(() => {
-    if (!currentNode || !parentMap.has(currentNode.id)) return;
+    if (!currentNode || !id) return;
+
+    // If we arrived here via a transposition jump, pop back to the source —
+    // even if that source is in a different opening.
+    const popped = navHistory.popIfArrivedAt({ openingId: id, nodeId: currentNode.id });
+    if (popped) {
+      if (popped.from.openingId === id) {
+        if (tree) {
+          const src = findNodeById(tree, popped.from.nodeId);
+          if (src) {
+            setForwardStack((prev) => [...prev, currentNode]);
+            setCurrentNode(src);
+            return;
+          }
+        }
+      } else {
+        // Cross-opening: route change with deep link.
+        navigate(`/library/${popped.from.openingId}?node=${popped.from.nodeId}`);
+        return;
+      }
+    }
+
+    if (!parentMap.has(currentNode.id)) return;
     setForwardStack((prev) => [...prev, currentNode]);
     setCurrentNode(parentMap.get(currentNode.id)!);
-  }, [currentNode, parentMap]);
+  }, [currentNode, parentMap, id, tree, navHistory, navigate]);
 
   // ── Delete ───────────────────────────────────────────────────────────────
 
@@ -318,7 +433,8 @@ export default function OpeningDetail() {
 
     const newFen = chess.fen();
 
-    const existing = currentNode.children?.find((c) => c.fen === newFen);
+    const newKey = positionKey(newFen);
+    const existing = currentNode.children?.find((c) => c.position_key === newKey);
     if (existing) {
       setCurrentNode(existing);
       setForwardStack([]);
@@ -333,14 +449,12 @@ export default function OpeningDetail() {
     createNode(id, parentId, result.san, result.from + result.to + (result.promotion ?? ''), newFen)
       .then(async (newNode) => {
         await reloadTree(newNode.id);
-        const intra = await findIntraOpeningTransposition(newFen, id, parentId);
-        if (intra) {
-          setTranspositionInfo({ type: 'intra-opening', moveSan: intra.moveSan });
-          return;
-        }
-        const cross = await findTransposition(newFen, parentFen, id);
-        if (cross) {
-          setTranspositionInfo({ type: 'cross-opening', openingName: cross.openingName, openingId: cross.openingId });
+        const [intra, cross] = await Promise.all([
+          findIntraOpeningTransposition(newFen, id, newNode.id),
+          findTransposition(newFen, parentFen, id),
+        ]);
+        if (intra || cross) {
+          setTransChoice({ newNodeId: newNode.id, intra, cross, isReprompt: false });
         }
       })
       .finally(() => setSaving(false));
@@ -379,15 +493,124 @@ export default function OpeningDetail() {
     if (!id || !pgnText.trim()) return;
     setImportError(null);
     try {
-      await importPgnToOpening(id, pgnText, setImportProgress);
+      const result = await importPgnToOpening(id, pgnText, setImportProgress, {
+        autoLinkTranspositions: autoLinkPgn,
+      });
       await reloadTree(currentNode?.id);
       setShowPgnImport(false);
       setPgnText('');
       setImportProgress(null);
+      // When auto-link was disabled, surface what got linked so the user
+      // can review/promote any of them.
+      if (!autoLinkPgn && result.transpositionLinks.length > 0) {
+        setImportTranspositionCount(result.transpositionLinks.length);
+      }
     } catch (err: any) {
       setImportError(err.message ?? 'Import failed');
     }
   }
+
+  // ── Transposition choice handlers ────────────────────────────────────────
+
+  const closeTransChoice = useCallback(() => {
+    setTransChoice(null);
+    setConfirmCanonical(false);
+  }, []);
+
+  const handleLinkIntra = useCallback(async () => {
+    if (!transChoice?.intra || !id) return;
+    setSaving(true);
+    try {
+      await linkNode(transChoice.newNodeId, transChoice.intra.canonicalNodeId);
+      await reloadTree(transChoice.newNodeId);
+    } finally {
+      setSaving(false);
+      closeTransChoice();
+    }
+  }, [transChoice, id, closeTransChoice]);
+
+  const handleMakeCanonical = useCallback(async () => {
+    if (!transChoice?.intra || !id) return;
+    setSaving(true);
+    try {
+      await makeCanonical(id, transChoice.newNodeId, transChoice.intra.canonicalNodeId);
+      await reloadTree(transChoice.newNodeId);
+    } finally {
+      setSaving(false);
+      closeTransChoice();
+    }
+  }, [transChoice, id, closeTransChoice]);
+
+  const handleLinkCross = useCallback(async () => {
+    if (!transChoice?.cross || !id) return;
+    setSaving(true);
+    try {
+      await linkNode(transChoice.newNodeId, transChoice.cross.canonicalNodeId);
+      await reloadTree(transChoice.newNodeId);
+    } finally {
+      setSaving(false);
+      closeTransChoice();
+    }
+  }, [transChoice, id, closeTransChoice]);
+
+  const handleKeepAsNew = useCallback(() => {
+    closeTransChoice();
+  }, [closeTransChoice]);
+
+  const handleCancelNewMove = useCallback(async () => {
+    if (!transChoice || !id) return;
+    setSaving(true);
+    try {
+      await deleteSubtree(transChoice.newNodeId, id);
+      // After cancel, jump back to the parent (which is what currentNode was before).
+      const parentId = tree ? buildParentMap(tree).get(transChoice.newNodeId)?.id : undefined;
+      await reloadTree(parentId);
+    } finally {
+      setSaving(false);
+      closeTransChoice();
+    }
+  }, [transChoice, id, tree, closeTransChoice]);
+
+  const handleUnlink = useCallback(async () => {
+    if (!transChoice || !id || !tree) return;
+    const node = findNodeById(tree, transChoice.newNodeId);
+    if (!node) return;
+    setSaving(true);
+    try {
+      // Cross-opening unlink promotes this node to canonical and re-points
+      // any other intra-opening duplicates at it.
+      await unlinkAndPromote(node.id, id, node.position_key);
+      await reloadTree(node.id);
+    } finally {
+      setSaving(false);
+      closeTransChoice();
+    }
+  }, [transChoice, id, tree, closeTransChoice]);
+
+  const handleAbsorbCross = useCallback(async (targetNodeId: string) => {
+    if (!transChoice || !id) return;
+    setSaving(true);
+    try {
+      await absorbCrossCanonical(transChoice.newNodeId, targetNodeId, id);
+      await reloadTree(transChoice.newNodeId);
+    } finally {
+      setSaving(false);
+      closeTransChoice();
+    }
+  }, [transChoice, id, closeTransChoice]);
+
+  // Open the choice modal for an existing node (re-prompt the original decision).
+  const openTransReprompt = useCallback(async (node: Node) => {
+    if (!id || !tree) return;
+    const parent = parentMap.get(node.id);
+    const parentFen = parent?.fen ?? tree.fen;
+    const [intra, cross] = await Promise.all([
+      findIntraOpeningTransposition(node.fen, id, node.id),
+      findTransposition(node.fen, parentFen, id),
+    ]);
+    setContextMenu(null);
+    setTransChoice({ newNodeId: node.id, intra, cross, isReprompt: true });
+  }, [id, tree, parentMap]);
 
   const handleMoveContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
     if (!parentMap.has(node.id)) return;
@@ -422,8 +645,9 @@ export default function OpeningDetail() {
 
   const boardFen = pendingFen ?? currentNode?.fen ?? tree.fen;
   const boardOrientation = opening.color === 'white' ? 'white' : 'black';
-  const hasNext = !!(currentNode?.children?.length);
-  const hasPrev = !!(currentNode && parentMap.has(currentNode.id));
+  const hasLinkTarget = !!(currentNode?.transposes_to_node_id && transTargets.get(currentNode.transposes_to_node_id));
+  const hasNext = !!(currentNode?.children?.length) || hasLinkTarget;
+  const hasPrev = !!(currentNode && (parentMap.has(currentNode.id) || navHistory.peek()));
   const isRoot = currentNode === tree;
 
   return (
@@ -521,8 +745,22 @@ export default function OpeningDetail() {
         <div className="relative border-t lg:border-t-0 lg:border-l border-border bg-bg-surface flex flex-col shrink-0 min-h-0 max-h-[40vh] lg:max-h-none lg:w-80 xl:w-96">
           {/* Panel header */}
           <div className="px-4 py-3 border-b border-border shrink-0 flex items-center gap-2">
-            <span className="text-accent text-xs">♟</span>
-            <h2 className="text-content-secondary text-xs font-medium uppercase tracking-wider">Moves</h2>
+            <button
+              onClick={() => setShowTransPanel(false)}
+              className={`text-xs font-medium uppercase tracking-wider transition-colors ${showTransPanel ? 'text-content-muted hover:text-content-secondary' : 'text-content-secondary'}`}
+            >
+              <span className="text-accent text-xs mr-1">♟</span>Moves
+            </button>
+            <button
+              onClick={() => setShowTransPanel(true)}
+              className={`text-xs font-medium uppercase tracking-wider transition-colors ${showTransPanel ? 'text-content-secondary' : 'text-content-muted hover:text-content-secondary'}`}
+              title="View transposition links"
+            >
+              <span className="text-accent text-xs mr-1">⇄</span>Links
+              {linkEntries.length > 0 && (
+                <span className="ml-1 px-1 rounded bg-accent/20 text-accent text-[0.65rem] align-middle">{linkEntries.length}</span>
+              )}
+            </button>
             <button
               onClick={() => { setShowPgnImport(true); setImportError(null); setPgnText(''); setImportProgress(null); }}
               className="ml-auto text-xs text-accent hover:text-accent-hover transition-colors"
@@ -531,15 +769,43 @@ export default function OpeningDetail() {
               Import/Merge PGN
             </button>
           </div>
-          <div ref={moveListRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 pb-14 min-h-0">
-            <MoveTree
-              root={tree}
-              selected={currentNode}
-              highlightColor={colors.gold.default}
-              onSelect={selectNode}
-              onContextMenu={handleMoveContextMenu}
-            />
-          </div>
+          {showTransPanel ? (
+            <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 min-h-0">
+              <TranspositionsPanel
+                links={linkEntries}
+                targets={transTargets}
+                currentOpeningId={id!}
+                onGoTo={(n) => { selectNode(n); setShowTransPanel(false); }}
+                onEdit={(n) => { openTransReprompt(n); setShowTransPanel(false); }}
+                onUnlink={async (n) => {
+                  setSaving(true);
+                  try {
+                    await unlinkAndPromote(n.id, id!, n.position_key);
+                    await reloadTree(n.id);
+                  } finally { setSaving(false); }
+                }}
+                onAbsorb={async (n, targetNodeId) => {
+                  setSaving(true);
+                  try {
+                    await absorbCrossCanonical(n.id, targetNodeId, id!);
+                    await reloadTree(n.id);
+                  } finally { setSaving(false); }
+                }}
+              />
+            </div>
+          ) : (
+            <div ref={moveListRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 pb-14 min-h-0">
+              <LinkTargetsContext.Provider value={transTargets}>
+                <MoveTree
+                  root={tree}
+                  selected={currentNode}
+                  highlightColor={colors.gold.default}
+                  onSelect={selectNode}
+                  onContextMenu={handleMoveContextMenu}
+                />
+              </LinkTargetsContext.Provider>
+            </div>
+          )}
           {/* Floating delete button */}
           {!isRoot && (
             <button
@@ -570,6 +836,12 @@ export default function OpeningDetail() {
             Go to move
           </button>
           <button
+            onClick={() => { openTransReprompt(contextMenu.node); }}
+            className="w-full text-left px-3 py-2 text-sm text-content-primary hover:bg-bg-surface transition-colors"
+          >
+            {contextMenu.node.transposes_to_node_id ? 'Change transposition link…' : 'Transpositions…'}
+          </button>
+          <button
             onClick={() => { handleDeleteNode(contextMenu.node); }}
             className="w-full text-left px-3 py-2 text-sm text-danger hover:bg-bg-surface transition-colors"
           >
@@ -578,23 +850,244 @@ export default function OpeningDetail() {
         </div>
       )}
 
-      {/* ── Transposition modal ── */}
-      {transpositionInfo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setTranspositionInfo(null)}>
+      {/* ── Transposition choice modal ── */}
+      {transChoice && tree && (() => {
+        const node = findNodeById(tree, transChoice.newNodeId);
+        const isLinked = !!node?.transposes_to_node_id;
+        const currentLinkTarget = node?.transposes_to_node_id ? transTargets.get(node.transposes_to_node_id) : null;
+        const isCrossLink = !!(currentLinkTarget && currentLinkTarget.openingId !== id);
+        const isIntraLink = isLinked && !isCrossLink;
+        const oldCanonical = transChoice.intra
+          ? findNodeById(tree, transChoice.intra.canonicalNodeId)
+          : null;
+        const reparentCount = oldCanonical ? countDescendants(oldCanonical) : 0;
+
+        if (transChoice.isReprompt && !transChoice.intra && !transChoice.cross && !isLinked) {
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={closeTransChoice}>
+              <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-sm mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-content-primary font-semibold mb-2">No transpositions for this position</h3>
+                <p className="text-content-secondary text-sm mb-4">This position doesn't appear elsewhere in this opening or in any other opening.</p>
+                <button onClick={closeTransChoice} className="w-full py-2 rounded-lg bg-bg-surface border border-border text-content-secondary text-sm hover:bg-bg-elevated transition-colors">Close</button>
+              </div>
+            </div>
+          );
+        }
+
+        if (confirmCanonical && transChoice.intra) {
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+              <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-sm mx-4 shadow-2xl">
+                <h3 className="text-content-primary font-semibold mb-2">Make this the canonical position?</h3>
+                <p className="text-content-secondary text-sm mb-2">
+                  The existing route (via <span className="text-accent font-medium">{transChoice.intra.moveSan ?? '?'}</span>) will become a link to your current move.
+                </p>
+                <p className="text-content-secondary text-sm mb-4">
+                  {reparentCount === 0
+                    ? 'The original position has no continuations yet, so nothing else will move.'
+                    : <>
+                        <span className="text-content-primary font-medium">{reparentCount}</span> continuation
+                        {reparentCount === 1 ? '' : 's'} will be re-rooted onto your current move.
+                      </>}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setConfirmCanonical(false)}
+                    disabled={saving}
+                    className="flex-1 py-2 rounded-lg border border-border text-content-secondary text-sm hover:bg-bg-surface transition-colors disabled:opacity-50"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={handleMakeCanonical}
+                    disabled={saving}
+                    className="flex-1 py-2 rounded-lg bg-accent text-bg-base font-medium text-sm hover:bg-accent-hover transition-colors disabled:opacity-50"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+            <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-md mx-4 shadow-2xl">
+              <h3 className="text-content-primary font-semibold mb-2">Transposition detected</h3>
+              <p className="text-content-secondary text-sm mb-4">
+                {transChoice.intra && transChoice.cross
+                  ? <>This position already exists in this opening (via <span className="text-accent font-medium">{transChoice.intra.moveSan ?? '?'}</span>) and in <span className="text-accent font-medium">{transChoice.cross.openingName}</span>.</>
+                  : transChoice.intra
+                    ? <>This position can also be reached in this opening via <span className="text-accent font-medium">{transChoice.intra.moveSan ?? '?'}</span>.</>
+                    : <>This position also appears in <span className="text-accent font-medium">{transChoice.cross!.openingName}</span>.</>
+                }
+              </p>
+
+              <div className="flex flex-col gap-2">
+                {transChoice.intra && (
+                  <button
+                    onClick={handleLinkIntra}
+                    disabled={saving}
+                    className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
+                  >
+                    <div className="text-content-primary text-sm font-medium">Link to the existing line</div>
+                    <div className="text-content-muted text-xs mt-0.5">This move becomes a link; the original line stays canonical.</div>
+                  </button>
+                )}
+                {transChoice.intra && (
+                  <button
+                    onClick={() => setConfirmCanonical(true)}
+                    disabled={saving}
+                    className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
+                  >
+                    <div className="text-content-primary text-sm font-medium">Make this line the canonical one</div>
+                    <div className="text-content-muted text-xs mt-0.5">
+                      {reparentCount > 0
+                        ? `Moves ${reparentCount} continuation${reparentCount === 1 ? '' : 's'} onto your current move.`
+                        : 'The original move becomes a link to this one.'}
+                    </div>
+                  </button>
+                )}
+                {transChoice.cross && (
+                  <button
+                    onClick={handleLinkCross}
+                    disabled={saving}
+                    className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
+                  >
+                    <div className="text-content-primary text-sm font-medium">
+                      Link to <span className="text-accent">{transChoice.cross.openingName}</span>
+                    </div>
+                    <div className="text-content-muted text-xs mt-0.5">Next moves jump into that opening's line for this position.</div>
+                  </button>
+                )}
+                {/* Only allow "keep as a new branching node" when there's no
+                    same-opening duplicate. A position must have exactly one
+                    branching node per opening. */}
+                {!transChoice.intra && (
+                  <button
+                    onClick={handleKeepAsNew}
+                    disabled={saving}
+                    className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
+                  >
+                    <div className="text-content-primary text-sm font-medium">Keep as a new branching node here</div>
+                    <div className="text-content-muted text-xs mt-0.5">Don't link to the other opening; keep this position only in this opening.</div>
+                  </button>
+                )}
+              </div>
+
+              {/* Cross-opening links only: absorb the other opening's branches
+                  into this opening, making this node the global canonical. */}
+              {isCrossLink && currentLinkTarget && (
+                <button
+                  onClick={() => handleAbsorbCross(currentLinkTarget.node.id)}
+                  disabled={saving}
+                  className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50 mt-2 w-full"
+                >
+                  <div className="text-content-primary text-sm font-medium">
+                    Absorb {currentLinkTarget.openingName}'s branches into this opening
+                  </div>
+                  <div className="text-content-muted text-xs mt-0.5">
+                    Moves all continuations from {currentLinkTarget.openingName} onto this line and links the other opening back to this one.
+                  </div>
+                </button>
+              )}
+
+              {/* Unlink is only meaningful for cross-opening links — for
+                  intra-opening links it would create a duplicate branching
+                  node, which the invariant forbids. */}
+              {isCrossLink && (
+                <button
+                  onClick={handleUnlink}
+                  disabled={saving}
+                  className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-danger/40 transition-colors disabled:opacity-50 mt-2 w-full"
+                >
+                  <div className="text-danger text-sm font-medium">Unlink</div>
+                  <div className="text-content-muted text-xs mt-0.5">
+                    Detach the cross-opening link. This move becomes the canonical for the position in this opening.
+                  </div>
+                </button>
+              )}
+              {isIntraLink && (
+                <div className="mt-2 px-3 py-2 rounded-lg border border-border bg-bg-base text-content-muted text-xs">
+                  This move links to another line in this opening. Unlinking would create two branching nodes for the same position — pick one of the options above instead (or change which line is canonical).
+                </div>
+              )}
+
+              <button
+                onClick={transChoice.isReprompt ? closeTransChoice : handleCancelNewMove}
+                disabled={saving}
+                className="w-full mt-3 py-2 rounded-lg text-content-muted text-sm hover:text-danger transition-colors disabled:opacity-50"
+              >
+                {transChoice.isReprompt ? 'Close' : 'Cancel — undo this move'}
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Cross-opening switch confirmation ── */}
+      {crossSwitch && id && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setCrossSwitch(null)}>
           <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-sm mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-content-primary font-semibold mb-2">Transposition detected</h3>
+            <h3 className="text-content-primary font-semibold mb-2">Continue in another opening?</h3>
             <p className="text-content-secondary text-sm mb-4">
-              {transpositionInfo.type === 'cross-opening'
-                ? <>This position also appears in <span className="text-accent font-medium">{transpositionInfo.openingName}</span>.</>
-                : <>This position can also be reached via a different move order in this opening.</>
-              }
+              This move links to <span className="text-accent font-medium">{crossSwitch.target.openingName}</span>. Continuing will switch to that opening at the matching position.
             </p>
-            <button
-              onClick={() => setTranspositionInfo(null)}
-              className="w-full py-2 rounded-lg bg-accent/15 text-accent font-medium text-sm hover:bg-accent/25 transition-colors"
-            >
-              OK
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCrossSwitch(null)}
+                className="flex-1 py-2 rounded-lg border border-border text-content-secondary text-sm hover:bg-bg-surface transition-colors"
+              >
+                Stay here
+              </button>
+              <button
+                onClick={() => {
+                  navHistory.push({
+                    from: { openingId: id, nodeId: crossSwitch.fromLinkId },
+                    to: { openingId: crossSwitch.target.openingId, nodeId: crossSwitch.target.node.id },
+                  });
+                  const targetId = crossSwitch.target.node.id;
+                  const targetOpening = crossSwitch.target.openingId;
+                  setCrossSwitch(null);
+                  navigate(`/library/${targetOpening}?node=${targetId}`);
+                }}
+                className="flex-1 py-2 rounded-lg bg-accent text-bg-base font-medium text-sm hover:bg-accent-hover transition-colors"
+              >
+                Switch
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── PGN post-import transposition review ── */}
+      {importTranspositionCount !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setImportTranspositionCount(null)}>
+          <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-sm mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-content-primary font-semibold mb-2">
+              {importTranspositionCount} transposition{importTranspositionCount === 1 ? '' : 's'} linked
+            </h3>
+            <p className="text-content-secondary text-sm mb-4">
+              The imported PGN reached {importTranspositionCount === 1 ? 'a position' : `${importTranspositionCount} positions`} that already existed in this opening. The new move{importTranspositionCount === 1 ? ' was' : 's were'} inserted as link{importTranspositionCount === 1 ? '' : 's'}. Open the Links panel to review or change them.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setImportTranspositionCount(null)}
+                className="flex-1 py-2 rounded-lg border border-border text-content-secondary text-sm hover:bg-bg-surface transition-colors"
+              >
+                Later
+              </button>
+              <button
+                onClick={() => {
+                  setShowTransPanel(true);
+                  setImportTranspositionCount(null);
+                }}
+                className="flex-1 py-2 rounded-lg bg-accent text-bg-base font-medium text-sm hover:bg-accent-hover transition-colors"
+              >
+                Open Links
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -614,6 +1107,22 @@ export default function OpeningDetail() {
               className="w-full h-40 bg-bg-surface border border-border rounded-lg px-3 py-2 text-content-primary text-sm font-mono resize-none outline-none focus:border-accent/40 transition-colors"
               disabled={!!importProgress}
             />
+            <label className="flex items-start gap-2 mt-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoLinkPgn}
+                onChange={(e) => setAutoLinkPgn(e.target.checked)}
+                disabled={!!importProgress}
+                className="mt-0.5 accent-accent disabled:opacity-50"
+              />
+              <span className="text-content-secondary text-xs">
+                <span className="text-content-primary">Auto-link transpositions</span>
+                <br />
+                <span className="text-content-muted">
+                  When PGN reaches a position that already exists in this opening via another move order, link the new move to the existing line. {autoLinkPgn ? 'Disable to review them after import.' : 'You\'ll be shown the new links to review after import.'}
+                </span>
+              </span>
+            </label>
             {importError && (
               <p className="text-danger text-xs mt-2">{importError}</p>
             )}
@@ -785,6 +1294,87 @@ function VariationBlock({ node, selected, highlightColor, onSelect, onContextMen
   );
 }
 
+function TranspositionsPanel({ links, targets, currentOpeningId, onGoTo, onEdit, onUnlink, onAbsorb }: {
+  links: { linkId: string; targetId: string; node: Node }[];
+  targets: Map<string, LinkTargetInfo>;
+  currentOpeningId: string;
+  onGoTo: (n: Node) => void;
+  onEdit: (n: Node) => void;
+  onUnlink: (n: Node) => void;
+  onAbsorb: (n: Node, targetNodeId: string) => void;
+}) {
+  if (links.length === 0) {
+    return (
+      <p className="text-content-muted text-sm">
+        No transposition links yet. When a move you make also exists elsewhere, you'll be prompted to link it.
+      </p>
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-2">
+      {links.map(({ linkId, targetId, node }) => {
+        const t = targets.get(targetId);
+        const isCross = !!(t && t.openingId !== currentOpeningId);
+        return (
+          <li key={linkId} className="bg-bg-base border border-border rounded-lg p-3">
+            <div className="flex items-start gap-2">
+              <span className={`mt-0.5 text-sm ${isCross ? 'text-accent' : 'text-gold'}`}>⇄</span>
+              <div className="flex-1 min-w-0">
+                <button
+                  onClick={() => onGoTo(node)}
+                  className="text-left text-content-primary text-sm font-medium hover:text-accent transition-colors truncate block w-full"
+                >
+                  {node.move_san ?? '(start)'}
+                </button>
+                <div className="text-content-muted text-xs mt-0.5 truncate">
+                  {t
+                    ? isCross
+                      ? <>links to <span className="text-accent">{t.openingName}</span> · {t.node.move_san ?? 'start'}</>
+                      : <>links to {t.node.move_san ?? 'start'} in this opening</>
+                    : 'link target missing'}
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-2">
+              <button
+                onClick={() => onEdit(node)}
+                className="flex-1 min-w-[60px] text-xs py-1 rounded bg-bg-surface border border-border text-content-secondary hover:border-accent/40 transition-colors"
+              >
+                Change
+              </button>
+              {isCross && t && (
+                <button
+                  onClick={() => onAbsorb(node, t.node.id)}
+                  className="flex-1 min-w-[60px] text-xs py-1 rounded bg-bg-surface border border-border text-content-secondary hover:border-accent/40 hover:text-accent transition-colors"
+                  title={`Move ${t.openingName}'s branches into this opening`}
+                >
+                  Absorb
+                </button>
+              )}
+              {isCross ? (
+                <button
+                  onClick={() => onUnlink(node)}
+                  className="flex-1 min-w-[60px] text-xs py-1 rounded bg-bg-surface border border-border text-content-secondary hover:border-danger/40 hover:text-danger transition-colors"
+                  title="Detach this cross-opening link; this node becomes the canonical here."
+                >
+                  Unlink
+                </button>
+              ) : (
+                <span
+                  className="flex-1 min-w-[60px] text-xs py-1 text-content-muted text-center italic"
+                  title="Intra-opening links can't be detached — use Change to pick a different option."
+                >
+                  intra
+                </span>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
   node: Node;
   selected: boolean;
@@ -794,6 +1384,17 @@ function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
 }) {
   const prefix = movePrefix(node, forceNumber);
   const white = isWhiteMove(node);
+  const linkTargets = useContext(LinkTargetsContext);
+  const isLink = !!node.transposes_to_node_id;
+  const target = node.transposes_to_node_id ? linkTargets.get(node.transposes_to_node_id) : null;
+  const isCrossLink = !!(target && target.openingId !== node.opening_id);
+  const linkTitle = !isLink
+    ? undefined
+    : target
+      ? isCrossLink
+        ? `Links to ${target.openingName} (${target.node.move_san ?? 'start'})`
+        : `Links to this position elsewhere in this opening (${target.node.move_san ?? 'start'})`
+      : 'Transposition link';
 
   return (
     <span className="inline-flex items-baseline" data-node-id={node.id}>
@@ -803,8 +1404,9 @@ function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
       <button
         onClick={() => onSelect(node)}
         onContextMenu={(e) => onContextMenu(e, node)}
+        title={linkTitle}
         className={[
-          'px-1.5 py-0.5 rounded-md text-sm font-mono transition-all',
+          'px-1.5 py-0.5 rounded-md text-sm font-mono transition-all inline-flex items-baseline gap-0.5',
           selected
             ? 'bg-gold/20 text-gold ring-1 ring-gold/40'
             : white
@@ -812,7 +1414,18 @@ function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
               : 'text-content-secondary hover:bg-bg-elevated',
         ].join(' ')}
       >
-        {node.move_san}
+        <span>{node.move_san}</span>
+        {isLink && (
+          <span
+            aria-hidden
+            className={[
+              'text-[0.7em] leading-none translate-y-[-1px]',
+              isCrossLink ? 'text-accent' : 'text-gold/80',
+            ].join(' ')}
+          >
+            ⇄
+          </span>
+        )}
       </button>
     </span>
   );
