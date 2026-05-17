@@ -1,4 +1,4 @@
-import type { Node } from '@/types';
+import type { Node } from '../types';
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
 
@@ -43,6 +43,36 @@ export function computeLearnableMap(
   out.set(root.id, false);
   walk(root);
   return out;
+}
+
+/**
+ * Walk the tree and return an augmented learned set that also includes any
+ * learnable user-move node whose position_key appears in
+ * `crossLearnedPositionKeys` — i.e. the same position with the same unique
+ * response was already learned in another opening (trunk transposition).
+ */
+export function augmentLearnedWithTranspositions(
+  root: Node,
+  userColor: 'white' | 'black',
+  learnedNodeIds: Set<string>,
+  learnableMap: Map<string, boolean>,
+  crossLearnedPositionKeys: Set<string>,
+): Set<string> {
+  if (crossLearnedPositionKeys.size === 0) return learnedNodeIds;
+  const augmented = new Set(learnedNodeIds);
+  function walk(n: Node) {
+    if (
+      isUserMove(n, userColor) &&
+      (learnableMap.get(n.id) ?? false) &&
+      !augmented.has(n.id) &&
+      crossLearnedPositionKeys.has(n.position_key)
+    ) {
+      augmented.add(n.id);
+    }
+    for (const c of n.children ?? []) walk(c);
+  }
+  walk(root);
+  return augmented;
 }
 
 // ── Session types ───────────────────────────────────────────────────────────
@@ -324,9 +354,6 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
   // Correct.
   const wasFirstTry = session.wrongAttemptsHere === 0;
   const matchLearnable = session.learnableMap.get(match.id) ?? false;
-  // A user-move "counts" toward progress when it matches what `totalApplicable`
-  // counted. Learn mode: only learnable + unlearned moves. Practice mode:
-  // every practicable user-move — i.e. branching moves AND learned learnables.
   const moveIsUserMove = isUserMove(match, session.options.userColor);
   const wasApplicableSelf = moveIsUserMove && (session.options.mode === 'learn'
     ? matchLearnable && !session.options.learnedNodeIds.has(match.id)
@@ -390,8 +417,7 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
       // Learn mode: tainted by a wrong attempt → queue for re-prompt at end.
       queue = [...queue, { parentId: session.currentNode.id, childId: match.id }];
     } else {
-      // Practice mode: count as completed even with prior wrong attempts
-      // (no re-queue concept in practice).
+      // Practice mode: count as completed even with prior wrong attempts.
       if (!firstTry.has(match.id)) {
         firstTry = new Set(firstTry);
         firstTry.add(match.id);
@@ -434,21 +460,12 @@ export function opponentMove(session: PracticeSession): { session: PracticeSessi
 
 // ── Backtracking ────────────────────────────────────────────────────────────
 
-/**
- * If currentNode has no more applicable children, mark this branch done and
- * walk up the tree until we find an ancestor that still has unpracticed
- * applicable children — that becomes the new current. If we walk past the
- * root, the session is complete.
- *
- * The tree itself doesn't carry parent pointers, so we re-walk from root.
- */
 function settleIfLeaf(session: PracticeSession): PracticeSession {
   if (applicableChildren(session).length === 0) return backtrack(session);
   return session;
 }
 
 export function backtrack(session: PracticeSession): PracticeSession {
-  // Don't backtrack during requeue — that phase has no tree DFS.
   if (session.phase === 'requeue') return session;
 
   const path = findPath(session.options.rootNode, session.currentNode.id);
@@ -456,7 +473,6 @@ export function backtrack(session: PracticeSession): PracticeSession {
     return enterRequeueOrComplete(session);
   }
   const practiced = new Set(session.practicedChildIds);
-  // Mark current as done, then walk up until an ancestor still has work.
   practiced.add(session.currentNode.id);
   for (let i = path.length - 2; i >= 0; i--) {
     const ancestor = path[i];
@@ -476,8 +492,6 @@ export function backtrack(session: PracticeSession): PracticeSession {
   return enterRequeueOrComplete({ ...session, practicedChildIds: practiced });
 }
 
-/** Called once main DFS has nothing left. Enter requeue phase if there are
- *  pending re-prompts; otherwise mark complete. */
 function enterRequeueOrComplete(session: PracticeSession): PracticeSession {
   if (session.requeueEntries.length === 0) {
     return { ...session, status: 'complete' };

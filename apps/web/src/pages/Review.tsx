@@ -13,9 +13,11 @@ import {
   getReviewStats,
   type ReviewItem,
   type ReviewStats,
-} from '@/lib/reviews';
+  applySm2,
+  intervalLabel,
+  type Quality,
+} from '@pawntree/shared';
 // gradeReview is used by the parent Review component below.
-import { applySm2, intervalLabel, type Quality } from '@/lib/sm2';
 
 type Stage = 'entry' | 'session' | 'done';
 type AttemptState =

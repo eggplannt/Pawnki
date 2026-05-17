@@ -11,17 +11,19 @@ import {
   createNode, deleteSubtree, updateNodeAnnotation,
   findTransposition, findIntraOpeningTransposition,
   linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical, getTranspositionTargets, getFirstChildId, positionKey,
-} from '@/lib/openings';
-import { getLearnedNodeIds } from '@/lib/reviews';
-import { computeApplicableCounts, computeLearnableMap } from '@/lib/practice';
-import {
   importPgnToOpening,
   type ImportProgress,
   type CrossTranspositionMatch,
   type IntraTranspositionMatch,
-} from '@/lib/openings';
+  getLearnedNodeIds,
+  getCrossOpeningLearnedPositionKeys,
+  computeApplicableCounts,
+  computeLearnableMap,
+  augmentLearnedWithTranspositions,
+  type Opening,
+  type Node,
+} from '@pawntree/shared';
 import { useColorTheme } from '@/hooks/useColorTheme';
-import type { Opening, Node } from '@/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -144,6 +146,7 @@ export default function OpeningDetail() {
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
   const [opening, setOpening] = useState<Opening | null>(null);
   const [learnedNodeIds, setLearnedNodeIds] = useState<Set<string>>(new Set());
+  const [crossLearnedPositionKeys, setCrossLearnedPositionKeys] = useState<Set<string>>(new Set());
   const [tree, setTree] = useState<Node | null>(null);
   const [currentNode, setCurrentNode] = useState<Node | null>(null);
   const [forwardStack, setForwardStack] = useState<Node[]>([]);
@@ -241,13 +244,15 @@ export default function OpeningDetail() {
   async function loadData(openingId: string, navigateToId?: string) {
     setLoading(true);
     try {
-      const [o, nodes, learned] = await Promise.all([
+      const [o, nodes, learned, crossKeys] = await Promise.all([
         getOpening(openingId),
         getNodes(openingId),
         getLearnedNodeIds(openingId).catch(() => new Set<string>()),
+        getCrossOpeningLearnedPositionKeys(openingId).catch(() => new Set<string>()),
       ]);
       setOpening(o);
       setLearnedNodeIds(learned);
+      setCrossLearnedPositionKeys(crossKeys);
       const t = buildTree(nodes);
       setTree(t);
       if (navigateToId && t) {
@@ -732,6 +737,13 @@ export default function OpeningDetail() {
     return computeLearnableMap(tree, openingColor);
   }, [tree, openingColor]);
 
+  const effectiveLearnedNodeIds = useMemo(
+    () => tree && openingColor
+      ? augmentLearnedWithTranspositions(tree, openingColor, learnedNodeIds, learnableMap, crossLearnedPositionKeys)
+      : learnedNodeIds,
+    [tree, openingColor, learnedNodeIds, learnableMap, crossLearnedPositionKeys],
+  );
+
   const totalLearnable = useMemo(() => {
     let n = 0;
     for (const [, learnable] of learnableMap) if (learnable) n++;
@@ -740,15 +752,15 @@ export default function OpeningDetail() {
 
   const learnedLearnableCount = useMemo(() => {
     let n = 0;
-    for (const nid of learnedNodeIds) if (learnableMap.get(nid)) n++;
+    for (const nid of effectiveLearnedNodeIds) if (learnableMap.get(nid)) n++;
     return n;
-  }, [learnedNodeIds, learnableMap]);
+  }, [effectiveLearnedNodeIds, learnableMap]);
 
   // Stable Context value — passing an inline object literal would re-render
   // every MoveButton consumer on every parent render, regardless of memo.
   const learnedCtxValue = useMemo(
-    () => ({ learned: learnedNodeIds, userColor: opening?.color ?? null, learnableMap }),
-    [learnedNodeIds, opening?.color, learnableMap],
+    () => ({ learned: effectiveLearnedNodeIds, userColor: opening?.color ?? null, learnableMap }),
+    [effectiveLearnedNodeIds, opening?.color, learnableMap],
   );
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -779,7 +791,7 @@ export default function OpeningDetail() {
   const boardFen = pendingFen ?? currentNode?.fen ?? tree.fen;
   const boardOrientation = opening.color === 'white' ? 'white' : 'black';
   const hasUnlearned = learnedLearnableCount < totalLearnable;
-  const hasLearned = learnedNodeIds.size > 0;
+  const hasLearned = effectiveLearnedNodeIds.size > 0;
   const hasLinkTarget = !!(currentNode?.transposes_to_node_id && transTargets.get(currentNode.transposes_to_node_id));
   const hasNext = !!(currentNode?.children?.length) || hasLinkTarget;
   const hasPrev = !!(currentNode && (parentMap.has(currentNode.id) || navHistory.peek()));
@@ -819,7 +831,7 @@ export default function OpeningDetail() {
                     : 'bg-bg-elevated text-content-muted cursor-not-allowed'
                   }`}
               >
-                {hasUnlearned && <span aria-hidden className="text-gold text-[0.85em] leading-none">▸</span>}
+                {hasUnlearned && <span aria-hidden className="text-gold text-[0.55em] leading-none">●</span>}
                 Learn
               </button>
               <button
@@ -1258,7 +1270,7 @@ export default function OpeningDetail() {
 
       {/* ── Learn / Practice start dialog ── */}
       {startMode && opening && currentNode && id && (() => {
-        const counts = computeApplicableCounts(currentNode, opening.color, learnedNodeIds, startMode);
+        const counts = computeApplicableCounts(currentNode, opening.color, effectiveLearnedNodeIds, startMode);
         const fromHereCount = counts.get(currentNode.id) ?? 0;
         const fromHereEnabled = fromHereCount > 0;
         const fromRootEnabled = startMode === 'learn' ? hasUnlearned : hasLearned;
@@ -1691,9 +1703,9 @@ const MoveButton = memo(function MoveButton({ node, selected, onSelect, onContex
           <span
             aria-hidden
             title="Study this position — next move not yet learned"
-            className="text-gold text-[0.8em] leading-none self-center mr-0.5"
+            className="text-gold text-[0.55em] leading-none self-center mr-0.5"
           >
-            ▸
+            ●
           </span>
         )}
         <span>{node.move_san}</span>

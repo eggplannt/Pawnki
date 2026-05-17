@@ -5,6 +5,12 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@pawntree/shared": [
+        "../../packages/shared/src"
+      ],
+      "@pawntree/shared/*": [
+        "../../packages/shared/src/*"
       ]
     }
   },

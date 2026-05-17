@@ -7,42 +7,36 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { View, useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { vars } from 'nativewind';
-import palettes from '../../../theme/colors.json';
+import { palettes, hexToRgbChannels, type ColorTheme } from '@pawntree/shared';
+
+export type { ColorTheme };
 
 type SchemeMode = 'light' | 'dark';
 export type ThemePref = 'light' | 'dark' | 'system';
 
 const STORAGE_KEY = 'pawntree-theme-pref';
 
-function hexToRgbChannels(hex: string): string {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `${r} ${g} ${b}`;
-}
-
 function buildVars(palette: typeof palettes.dark) {
   return vars({
-    '--color-bg-base':          hexToRgbChannels(palette.bg.base),
-    '--color-bg-surface':       hexToRgbChannels(palette.bg.surface),
-    '--color-bg-elevated':      hexToRgbChannels(palette.bg.elevated),
-    '--color-content-primary':  hexToRgbChannels(palette.content.primary),
-    '--color-content-secondary':hexToRgbChannels(palette.content.secondary),
-    '--color-content-muted':    hexToRgbChannels(palette.content.muted),
-    '--color-accent':           hexToRgbChannels(palette.accent.DEFAULT),
-    '--color-accent-hover':     hexToRgbChannels(palette.accent.hover),
-    '--color-accent-dim':       hexToRgbChannels(palette.accent.dim),
-    '--color-gold':             hexToRgbChannels(palette.gold.DEFAULT),
-    '--color-gold-dim':         hexToRgbChannels(palette.gold.dim),
-    '--color-border':           hexToRgbChannels(palette.border.DEFAULT),
-    '--color-border-subtle':    hexToRgbChannels(palette.border.subtle),
-    '--color-danger':           hexToRgbChannels(palette.danger),
-    '--color-success':          hexToRgbChannels(palette.success),
+    '--color-bg-base':           hexToRgbChannels(palette.bg.base),
+    '--color-bg-surface':        hexToRgbChannels(palette.bg.surface),
+    '--color-bg-elevated':       hexToRgbChannels(palette.bg.elevated),
+    '--color-content-primary':   hexToRgbChannels(palette.content.primary),
+    '--color-content-secondary': hexToRgbChannels(palette.content.secondary),
+    '--color-content-muted':     hexToRgbChannels(palette.content.muted),
+    '--color-accent':            hexToRgbChannels(palette.accent.DEFAULT),
+    '--color-accent-hover':      hexToRgbChannels(palette.accent.hover),
+    '--color-accent-dim':        hexToRgbChannels(palette.accent.dim),
+    '--color-gold':              hexToRgbChannels(palette.gold.DEFAULT),
+    '--color-gold-dim':          hexToRgbChannels(palette.gold.dim),
+    '--color-border':            hexToRgbChannels(palette.border.DEFAULT),
+    '--color-border-subtle':     hexToRgbChannels(palette.border.subtle),
+    '--color-danger':            hexToRgbChannels(palette.danger),
+    '--color-success':           hexToRgbChannels(palette.success),
   });
 }
 
-function buildColorTheme(palette: typeof palettes.dark) {
+function buildColorTheme(palette: typeof palettes.dark): ColorTheme {
   return {
     bg: palette.bg,
     content: palette.content,
@@ -64,8 +58,6 @@ function buildColorTheme(palette: typeof palettes.dark) {
     board:   palette.board,
   };
 }
-
-export type ColorTheme = ReturnType<typeof buildColorTheme>;
 
 interface ThemeContextValue {
   pref: ThemePref;

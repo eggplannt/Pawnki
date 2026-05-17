@@ -1,14 +1,15 @@
-import { supabase } from './supabase';
+import { getDb } from './db';
 import { parsePgn, positionKey, type PgnNode } from './pgn-tree';
 import { computeLearnableMap } from './practice';
 
 export { positionKey } from './pgn-tree';
-import type { Opening, Node } from '@/types';
+import type { Opening, Node } from '../types';
 
 // ── Openings ────────────────────────────────────────────────────────────────
 
 export async function listOpenings() {
-  const { data, error } = await supabase
+  // Single query — skip review_cards until Phase 6
+  const { data, error } = await getDb()
     .from('openings')
     .select('*, nodes(count)')
     .order('created_at', { ascending: false });
@@ -25,7 +26,7 @@ export async function listOpenings() {
 }
 
 export async function getOpening(id: string) {
-  const { data, error } = await supabase
+  const { data, error } = await getDb()
     .from('openings')
     .select('*')
     .eq('id', id)
@@ -47,12 +48,13 @@ export async function createOpening(
   pgn: string | null,
   onProgress?: (p: ImportProgress) => void,
 ) {
+  const db = getDb();
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await db.auth.getUser();
   if (!user) throw new Error('Not authenticated');
 
-  const { data: opening, error } = await supabase
+  const { data: opening, error } = await db
     .from('openings')
     .insert({ name, color, user_id: user.id })
     .select()
@@ -68,7 +70,7 @@ export async function createOpening(
   if (pgn && pgn.trim()) {
     await importPgnToOpening(opening.id, pgn, onProgress);
   } else {
-    await supabase.from('nodes').insert({
+    await db.from('nodes').insert({
       opening_id: opening.id,
       fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
       sort_order: 0,
@@ -82,7 +84,7 @@ export async function updateOpening(
   id: string,
   updates: { name?: string; description?: string | null },
 ) {
-  const { data, error } = await supabase
+  const { data, error } = await getDb()
     .from('openings')
     .update(updates)
     .eq('id', id)
@@ -94,16 +96,17 @@ export async function updateOpening(
 }
 
 export async function deleteOpening(id: string) {
-  const { error } = await supabase.from('openings').delete().eq('id', id);
+  const { error } = await getDb().from('openings').delete().eq('id', id);
   if (error) throw error;
 }
 
 // ── Nodes ───────────────────────────────────────────────────────────────────
 
 export async function getLearnableCountsByOpening(): Promise<Map<string, number>> {
+  const db = getDb();
   const [openingsRes, nodesRes] = await Promise.all([
-    supabase.from('openings').select('id, color'),
-    supabase.from('nodes').select('*').order('sort_order', { ascending: true }),
+    db.from('openings').select('id, color'),
+    db.from('nodes').select('*').order('sort_order', { ascending: true }),
   ]);
   if (openingsRes.error) throw openingsRes.error;
   if (nodesRes.error) throw nodesRes.error;
@@ -128,7 +131,7 @@ export async function getLearnableCountsByOpening(): Promise<Map<string, number>
 }
 
 export async function getNodes(openingId: string): Promise<Node[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getDb()
     .from('nodes')
     .select('*')
     .eq('opening_id', openingId)
@@ -138,6 +141,7 @@ export async function getNodes(openingId: string): Promise<Node[]> {
   return data as Node[];
 }
 
+/** Build a tree structure from flat nodes. */
 export function buildTree(nodes: Node[]): Node | null {
   if (nodes.length === 0) return null;
 
@@ -169,7 +173,9 @@ export async function createNode(
   fen: string,
   annotation?: string | null,
 ): Promise<Node> {
-  const { data: maxRow } = await supabase
+  const db = getDb();
+  // Get the next sort_order
+  const { data: maxRow } = await db
     .from('nodes')
     .select('sort_order')
     .eq('opening_id', openingId)
@@ -179,7 +185,7 @@ export async function createNode(
 
   const sortOrder = (maxRow?.sort_order ?? 0) + 1;
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('nodes')
     .insert({
       opening_id: openingId,
@@ -198,6 +204,7 @@ export async function createNode(
 }
 
 export class CrossLinkDeleteError extends Error {
+  /** Names of other openings that have links pointing into the subtree. */
   blockingOpenings: string[];
   constructor(openings: string[]) {
     super(
@@ -211,6 +218,12 @@ export class CrossLinkDeleteError extends Error {
 }
 
 export async function deleteSubtree(nodeId: string, openingId: string) {
+  // Find any links (in any opening) that point at nodes inside this subtree.
+  // - Cross-opening links: BLOCK the delete; user must unlink/absorb first.
+  // - Same-opening links to root: promote one to canonical (existing behavior).
+  // - Same-opening links to non-root descendants: also block, since promoting
+  //   them safely would require re-grafting and we have no clean semantics.
+  const db = getDb();
   const allNodes = await getNodes(openingId);
   const subtreeIds = new Set<string>();
   function collectIds(id: string) {
@@ -221,7 +234,7 @@ export async function deleteSubtree(nodeId: string, openingId: string) {
   }
   collectIds(nodeId);
 
-  const { data: linkRows } = await supabase
+  const { data: linkRows } = await db
     .from('nodes')
     .select('id, opening_id, sort_order, transposes_to_node_id, openings(name)')
     .in('transposes_to_node_id', [...subtreeIds]);
@@ -247,12 +260,12 @@ export async function deleteSubtree(nodeId: string, openingId: string) {
   if (intraToRoot.length > 0) {
     const promoted = intraToRoot[0];
     await makeCanonical(openingId, promoted.id, nodeId);
-    const { error } = await supabase.from('nodes').delete().eq('id', nodeId);
+    const { error } = await db.from('nodes').delete().eq('id', nodeId);
     if (error) throw error;
     return;
   }
 
-  const { error } = await supabase
+  const { error } = await db
     .from('nodes')
     .delete()
     .in('id', [...subtreeIds]);
@@ -260,7 +273,7 @@ export async function deleteSubtree(nodeId: string, openingId: string) {
 }
 
 export async function updateNodeAnnotation(nodeId: string, annotation: string | null) {
-  const { error } = await supabase
+  const { error } = await getDb()
     .from('nodes')
     .update({ annotation })
     .eq('id', nodeId);
@@ -268,6 +281,10 @@ export async function updateNodeAnnotation(nodeId: string, annotation: string | 
   if (error) throw error;
 }
 
+/**
+ * Walk a chain of links to the ultimate canonical node id.
+ * (We don't allow link-to-link, but be defensive.)
+ */
 function resolveCanonicalId(node: Pick<Node, 'id' | 'transposes_to_node_id'>, all: Map<string, Node>): string {
   let cur: Pick<Node, 'id' | 'transposes_to_node_id'> | undefined = node;
   const seen = new Set<string>();
@@ -290,6 +307,12 @@ export interface IntraTranspositionMatch {
   moveSan: string | null;
 }
 
+/**
+ * Find a transposition in a DIFFERENT opening. Returns the canonical
+ * (unlinked) node id in the target opening so the caller can link to it.
+ * Skips matches where the parent FEN also exists in the target opening —
+ * that means it's a shared trunk position, not a real transposition.
+ */
 export async function findTransposition(
   fen: string,
   parentFen: string,
@@ -297,8 +320,9 @@ export async function findTransposition(
 ): Promise<CrossTranspositionMatch | null> {
   const key = positionKey(fen);
   const parentKey = positionKey(parentFen);
+  const db = getDb();
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('nodes')
     .select('id, opening_id, transposes_to_node_id, openings(id, name, color)')
     .eq('position_key', key)
@@ -309,7 +333,7 @@ export async function findTransposition(
 
   for (const row of data) {
     const otherOpeningId = row.opening_id;
-    const { data: parentMatch } = await supabase
+    const { data: parentMatch } = await db
       .from('nodes')
       .select('id')
       .eq('position_key', parentKey)
@@ -321,9 +345,10 @@ export async function findTransposition(
     const opening = (row as any).openings;
     if (!opening) continue;
 
+    // Resolve to canonical inside that opening.
     let canonicalId = row.id as string;
     if (row.transposes_to_node_id) {
-      const { data: targetRow } = await supabase
+      const { data: targetRow } = await db
         .from('nodes')
         .select('id')
         .eq('id', row.transposes_to_node_id)
@@ -342,12 +367,16 @@ export async function findTransposition(
   return null;
 }
 
+/**
+ * Find a same-opening transposition (same FEN reached via a different move
+ * order). Returns the canonical node id within this opening.
+ */
 export async function findIntraOpeningTransposition(
   fen: string,
   openingId: string,
   excludeNodeId: string,
 ): Promise<IntraTranspositionMatch | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getDb()
     .from('nodes')
     .select('id, move_san, parent_id, transposes_to_node_id')
     .eq('position_key', positionKey(fen))
@@ -358,9 +387,13 @@ export async function findIntraOpeningTransposition(
   const lookup = new Map<string, Node>();
   for (const n of data) lookup.set(n.id, n as Node);
 
+  // Candidates: any node with this FEN that isn't the just-created node
+  // and isn't itself in our subtree.
   const candidates = data.filter((n) => n.id !== excludeNodeId);
   if (candidates.length === 0) return null;
 
+  // Prefer a canonical (transposes_to_node_id IS NULL) candidate; fall back
+  // to walking a link to its canonical.
   const canonical = candidates.find((n) => !n.transposes_to_node_id);
   const pick = canonical ?? candidates[0];
   const canonicalId = resolveCanonicalId(pick, lookup);
@@ -368,13 +401,17 @@ export async function findIntraOpeningTransposition(
   return { canonicalNodeId: canonicalId, moveSan: pick.move_san };
 }
 
+/**
+ * Resolve transposition targets for a set of link target node IDs in one
+ * round-trip. Returns a map target-node-id → target info (node + opening).
+ */
 export async function getTranspositionTargets(
   targetIds: string[],
 ): Promise<Map<string, { node: Node; openingId: string; openingName: string; openingColor: 'white' | 'black' }>> {
   const out = new Map<string, { node: Node; openingId: string; openingName: string; openingColor: 'white' | 'black' }>();
   if (targetIds.length === 0) return out;
 
-  const { data, error } = await supabase
+  const { data, error } = await getDb()
     .from('nodes')
     .select('*, openings(id, name, color)')
     .in('id', targetIds);
@@ -399,7 +436,7 @@ export async function getTranspositionTargets(
  * actually advances past the (same-position) canonical node.
  */
 export async function getFirstChildId(parentId: string): Promise<string | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getDb()
     .from('nodes')
     .select('id')
     .eq('parent_id', parentId)
@@ -409,30 +446,41 @@ export async function getFirstChildId(parentId: string): Promise<string | null> 
   return data[0].id;
 }
 
+/** Set node.transposes_to_node_id. */
 export async function linkNode(linkNodeId: string, canonicalNodeId: string) {
-  const { error } = await supabase
+  const { error } = await getDb()
     .from('nodes')
     .update({ transposes_to_node_id: canonicalNodeId })
     .eq('id', linkNodeId);
   if (error) throw error;
 }
 
+/** Clear the transposition link from a node. */
 export async function unlinkNode(linkNodeId: string) {
-  const { error } = await supabase
+  const { error } = await getDb()
     .from('nodes')
     .update({ transposes_to_node_id: null })
     .eq('id', linkNodeId);
   if (error) throw error;
 }
 
+/**
+ * Unlink a cross-opening link and promote this node to canonical for its
+ * position within its opening. Any other nodes in the same opening that
+ * share this position_key (whether previously linked elsewhere or stray
+ * duplicates) are repointed to link to this node.
+ */
 export async function unlinkAndPromote(
   nodeId: string,
   openingId: string,
   positionKeyValue: string,
 ) {
+  const db = getDb();
+  // 1. Clear the link from this node.
   await unlinkNode(nodeId);
 
-  const { data: duplicates, error } = await supabase
+  // 2. Find other intra-opening nodes with the same position_key.
+  const { data: duplicates, error } = await db
     .from('nodes')
     .select('id')
     .eq('opening_id', openingId)
@@ -443,22 +491,34 @@ export async function unlinkAndPromote(
   const dupIds = (duplicates ?? []).map((r) => r.id);
   if (dupIds.length === 0) return;
 
-  const { error: repointErr } = await supabase
+  // 3. Repoint all duplicates to link to this node.
+  const { error: repointErr } = await db
     .from('nodes')
     .update({ transposes_to_node_id: nodeId })
     .in('id', dupIds);
   if (repointErr) throw repointErr;
 }
 
+/**
+ * Pull the cross-opening canonical's subtree into this opening. The link
+ * node `newCanonicalId` becomes the global canonical for this position:
+ *   1. Every descendant of the cross-opening canonical is moved into this
+ *      opening (opening_id rewritten).
+ *   2. The old canonical's direct children are reparented onto this node.
+ *   3. Any other node (in any opening) that linked to the old canonical is
+ *      repointed to this node.
+ *   4. The old canonical itself becomes a link to this node.
+ */
 export async function absorbCrossCanonical(
   newCanonicalId: string,
   oldCanonicalId: string,
   newOpeningId: string,
 ) {
+  const db = getDb();
   const allDescendantIds: string[] = [];
   let frontier = [oldCanonicalId];
   while (frontier.length > 0) {
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('nodes')
       .select('id')
       .in('parent_id', frontier);
@@ -470,27 +530,27 @@ export async function absorbCrossCanonical(
   }
 
   if (allDescendantIds.length > 0) {
-    const { error: oidErr } = await supabase
+    const { error: oidErr } = await db
       .from('nodes')
       .update({ opening_id: newOpeningId })
       .in('id', allDescendantIds);
     if (oidErr) throw oidErr;
   }
 
-  const { data: directChildren, error: childErr } = await supabase
+  const { data: directChildren, error: childErr } = await db
     .from('nodes')
     .select('id')
     .eq('parent_id', oldCanonicalId);
   if (childErr) throw childErr;
   if (directChildren && directChildren.length > 0) {
-    const { error: reparentErr } = await supabase
+    const { error: reparentErr } = await db
       .from('nodes')
       .update({ parent_id: newCanonicalId })
       .in('id', directChildren.map((r) => r.id));
     if (reparentErr) throw reparentErr;
   }
 
-  const { error: repointErr } = await supabase
+  const { error: repointErr } = await db
     .from('nodes')
     .update({ transposes_to_node_id: newCanonicalId })
     .eq('transposes_to_node_id', oldCanonicalId);
@@ -499,12 +559,20 @@ export async function absorbCrossCanonical(
   await linkNode(oldCanonicalId, newCanonicalId);
 }
 
+/**
+ * Promote `newCanonicalId` to be the canonical node for its FEN within the
+ * opening: reparent the old canonical's children onto the new node, then
+ * convert the old canonical (and any other nodes that linked to it,
+ * including cross-opening links) into links pointing at the new node.
+ */
 export async function makeCanonical(
   _openingId: string,
   newCanonicalId: string,
   oldCanonicalId: string,
 ) {
-  const { data: childRows, error: childErr } = await supabase
+  const db = getDb();
+  // 1) Reparent old canonical's direct children onto the new canonical.
+  const { data: childRows, error: childErr } = await db
     .from('nodes')
     .select('id')
     .eq('parent_id', oldCanonicalId);
@@ -512,38 +580,56 @@ export async function makeCanonical(
 
   if (childRows && childRows.length > 0) {
     const ids = childRows.map((r) => r.id);
-    const { error: reparentErr } = await supabase
+    const { error: reparentErr } = await db
       .from('nodes')
       .update({ parent_id: newCanonicalId })
       .in('id', ids);
     if (reparentErr) throw reparentErr;
   }
 
-  const { error: repointErr } = await supabase
+  // 2) Repoint EVERY existing link (any opening) from old → new.
+  const { error: repointErr } = await db
     .from('nodes')
     .update({ transposes_to_node_id: newCanonicalId })
     .eq('transposes_to_node_id', oldCanonicalId);
   if (repointErr) throw repointErr;
 
+  // 3) Convert old canonical itself into a link to new.
   await linkNode(oldCanonicalId, newCanonicalId);
 }
 
 // ── PGN Import ──────────────────────────────────────────────────────────────
 
 export interface ImportOptions {
+  /** If true (default), transpositions found during import are silently
+   *  inserted as links to the existing canonical. If false, they're still
+   *  inserted as links (the one-branching-node invariant requires it), but
+   *  returned in the result so the caller can prompt the user to review. */
   autoLinkTranspositions?: boolean;
 }
 
 export interface ImportResult {
+  /** Link nodes created during import because their position already
+   *  existed in this opening (different move path). Populated only when
+   *  autoLinkTranspositions=false. */
   transpositionLinks: { linkNodeId: string; canonicalNodeId: string }[];
 }
 
+/**
+ * Import PGN into an opening, merging with existing nodes.
+ * If the opening already has a tree, new moves are merged in —
+ * existing positions on the same path are reused, only new branches are inserted.
+ * Positions reached via a DIFFERENT path that already exist in the opening
+ * become link nodes (transposition).
+ * If the opening is empty, a fresh tree is created.
+ */
 export async function importPgnToOpening(
   openingId: string,
   pgn: string,
   onProgress?: (p: ImportProgress) => void,
   options: ImportOptions = {},
 ): Promise<ImportResult> {
+  const db = getDb();
   const autoLink = options.autoLinkTranspositions ?? true;
   const transpositionLinks: { linkNodeId: string; canonicalNodeId: string }[] = [];
 
@@ -584,7 +670,7 @@ export async function importPgnToOpening(
     indexExisting(existingTree);
     rootDbId = existingTree.id;
   } else {
-    const { data: maxRow } = await supabase
+    const { data: maxRow } = await db
       .from('nodes')
       .select('sort_order')
       .eq('opening_id', openingId)
@@ -593,7 +679,7 @@ export async function importPgnToOpening(
       .single();
     const sortOrder = (maxRow?.sort_order ?? -1) + 1;
 
-    const { data: rootRow, error: rootErr } = await supabase
+    const { data: rootRow, error: rootErr } = await db
       .from('nodes')
       .insert({
         opening_id: openingId,
@@ -620,7 +706,7 @@ export async function importPgnToOpening(
     parentDbId: string,
     linkTo: string | null,
   ): Promise<{ id: string; isLink: boolean; posKey: string }> {
-    const { data: maxRow } = await supabase
+    const { data: maxRow } = await db
       .from('nodes')
       .select('sort_order')
       .eq('opening_id', openingId)
@@ -629,7 +715,7 @@ export async function importPgnToOpening(
       .single();
     const sortOrder = (maxRow?.sort_order ?? -1) + 1;
 
-    const { data: row, error } = await supabase
+    const { data: row, error } = await db
       .from('nodes')
       .insert({
         opening_id: openingId,

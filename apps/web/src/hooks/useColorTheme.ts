@@ -1,25 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import colors from '../../../../theme/colors.json';
+import { palettes, hexToRgbChannels, type ColorTheme } from '@pawntree/shared';
+
+export type { ColorTheme };
 
 type Theme = 'dark' | 'light';
 
 const STORAGE_KEY = 'pawntree-theme';
 
-const palettes = { dark: colors.dark, light: colors.light } as const;
-
 function getInitialTheme(): Theme {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === 'light' || stored === 'dark') return stored;
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-}
-
-/** Convert "#rrggbb" → "r g b" channel string for `rgb(var(--x) / <alpha>)`. */
-function hexToRgbChannels(hex: string): string {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `${r} ${g} ${b}`;
 }
 
 /** Flatten palette object → CSS custom property entries with rgb channels.
@@ -41,9 +32,9 @@ function flattenToCssVars(obj: Record<string, unknown>, prefix = '--color'): Rec
 
 /** Apply palette as CSS custom properties on :root so Tailwind `var()` refs work. */
 function applyPalette(palette: Record<string, unknown>) {
-  const vars = flattenToCssVars(palette);
+  const cssVars = flattenToCssVars(palette);
   const root = document.documentElement.style;
-  for (const [name, value] of Object.entries(vars)) {
+  for (const [name, value] of Object.entries(cssVars)) {
     root.setProperty(name, value);
   }
 }
@@ -55,7 +46,7 @@ function applyTheme(theme: Theme) {
   } else {
     root.classList.remove('light');
   }
-  applyPalette(palettes[theme]);
+  applyPalette(palettes[theme] as unknown as Record<string, unknown>);
 }
 
 /** Read a CSS custom property and reassemble as an `rgb(...)` color.
@@ -67,7 +58,7 @@ function cssVar(name: string): string {
 }
 
 /** Returns the current resolved color values (for third-party components). */
-export function getColorValues() {
+export function getColorValues(): ColorTheme {
   return {
     bg: {
       base:     cssVar('--color-bg-base'),
@@ -100,8 +91,6 @@ export function getColorValues() {
     },
   };
 }
-
-export type ColorTheme = ReturnType<typeof getColorValues>;
 
 interface ThemeContextValue {
   theme: Theme;

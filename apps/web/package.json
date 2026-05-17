@@ -10,6 +10,7 @@
     "gen:types": "supabase gen types typescript --local 2>/dev/null > src/types/database.types.ts"
   },
   "dependencies": {
+    "@pawntree/shared": "workspace:*",
     "@mdi/js": "^7.4.47",
     "@mdi/react": "^1.6.1",
     "@supabase/supabase-js": "^2.105.4",
