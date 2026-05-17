@@ -15,7 +15,7 @@ import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppShell } from '@/components/AppShell';
 import { listOpenings, createOpening, deleteOpening, getLearnableCountsByOpening, type ImportProgress } from '@/lib/openings';
-import { getLearnedCountsByOpening } from '@/lib/review-cards';
+import { getLearnedCountsByOpening } from '@/lib/reviews';
 import { useColorTheme } from '@/hooks/useColorTheme';
 import type { Opening } from '@/types';
 

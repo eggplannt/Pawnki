@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   View,
   Image,
@@ -183,16 +183,33 @@ interface AnimatedPieceProps {
   onTap: (square: string) => void;
   onDragStart: (square: string) => void;
   onDrop: (from: string, to: string | null) => void;
+  /** Map of legal target squares for the piece currently being dragged.
+   *  Read from the worklet on drop to decide whether to snap (legal move,
+   *  parent will reposition via FEN change) or animate back to source. */
+  legalTargetsSV: { value: Record<string, boolean> };
+  /** 1 while indicators should be visible, 0 to hide them instantly on drop
+   *  (before React unmounts them via setSelected(null)). */
+  indicatorsVisibleSV: { value: number };
 }
 
-const AnimatedPiece = memo(function AnimatedPiece({
+export interface AnimatedPieceHandle {
+  /** Snap the piece directly (no animation) to the given square's pixels, or
+   *  to its current logical square if omitted. Called when the parent rejects
+   *  a chess-legal drop so the optimistic snap in the gesture's onEnd is
+   *  reversed without an animated back-glide. */
+  snapBack: (square?: string) => void;
+}
+
+const AnimatedPiece = memo(forwardRef<AnimatedPieceHandle, AnimatedPieceProps>(function AnimatedPiece({
   piece,
   squareSize,
   orientation,
   onTap,
   onDragStart,
   onDrop,
-}: AnimatedPieceProps) {
+  legalTargetsSV,
+  indicatorsVisibleSV,
+}, ref) {
   const initial = useMemo(
     () => squareToPixels(piece.square, squareSize, orientation),
     // only the initial mount value — subsequent updates go through useEffect
@@ -204,6 +221,11 @@ const AnimatedPiece = memo(function AnimatedPiece({
   const baseY = useSharedValue(initial.y);
   const dragX = useSharedValue(0);
   const dragY = useSharedValue(0);
+  // Offset from the piece center to the touch point at gesture start. Applied
+  // so the piece re-centers under the finger instead of staying anchored to
+  // wherever the user happened to touch on the piece.
+  const fingerOffsetX = useSharedValue(0);
+  const fingerOffsetY = useSharedValue(0);
   const dragging = useSharedValue(0); // 0 or 1; drives scale + zIndex
 
   // Animate to the new square pixels whenever the piece's logical square,
@@ -229,22 +251,32 @@ const AnimatedPiece = memo(function AnimatedPiece({
 
     const pan = Gesture.Pan()
       .minDistance(4)
-      .onStart(() => {
+      .onStart((e) => {
         'worklet';
         cancelAnimation(baseX);
         cancelAnimation(baseY);
+        // Capture finger position within the piece view so we can re-center
+        // the piece on the finger. The piece's view top-left is at (baseX,
+        // baseY) when the gesture starts (dragX/Y = 0), and the view is
+        // squareSize on each side, so e.x/y is the finger offset within it.
+        fingerOffsetX.value = e.x - squareSize / 2;
+        fingerOffsetY.value = e.y - squareSize / 2;
+        dragX.value = fingerOffsetX.value;
+        dragY.value = fingerOffsetY.value;
         dragging.value = withTiming(1, { duration: 80 });
         runOnJS(onDragStart)(pieceSquare);
       })
       .onUpdate((e) => {
         'worklet';
-        dragX.value = e.translationX;
-        dragY.value = e.translationY;
+        dragX.value = e.translationX + fingerOffsetX.value;
+        dragY.value = e.translationY + fingerOffsetY.value;
       })
       .onEnd((e) => {
         'worklet';
-        const releaseX = baseX.value + e.translationX + squareSize / 2;
-        const releaseY = baseY.value + e.translationY + squareSize / 2;
+        // Drop target is where the finger is — i.e. the piece's visual center,
+        // which now equals the finger position because of fingerOffset above.
+        const releaseX = baseX.value + e.translationX + fingerOffsetX.value + squareSize / 2;
+        const releaseY = baseY.value + e.translationY + fingerOffsetY.value + squareSize / 2;
         const vCol = Math.floor(releaseX / squareSize);
         const vRow = Math.floor(releaseY / squareSize);
         let target: string | null = null;
@@ -253,8 +285,18 @@ const AnimatedPiece = memo(function AnimatedPiece({
           const row = isWhiteOrient ? vRow : 7 - vRow;
           target = `${String.fromCharCode(97 + col)}${8 - row}`;
         }
-        dragX.value = withTiming(0, { duration: ANIMATION_MS });
-        dragY.value = withTiming(0, { duration: ANIMATION_MS });
+        // Snap instantly to final position — no animation on drop, for snappy
+        // feel. Legal target → snap to that square's pixels; otherwise → snap
+        // back to source by zeroing drag offsets (baseX/Y still hold source).
+        if (target && target !== pieceSquare && legalTargetsSV.value[target]) {
+          baseX.value = vCol * squareSize;
+          baseY.value = vRow * squareSize;
+        }
+        dragX.value = 0;
+        dragY.value = 0;
+        // Hide indicators immediately; React will unmount them shortly via
+        // setSelected(null), but that's a frame or two behind.
+        indicatorsVisibleSV.value = 0;
         dragging.value = withTiming(0, { duration: 80 });
         runOnJS(onDrop)(pieceSquare, target);
       })
@@ -264,7 +306,7 @@ const AnimatedPiece = memo(function AnimatedPiece({
       });
 
     return Gesture.Race(tap, pan);
-  }, [pieceSquare, squareSize, isWhiteOrient, onTap, onDragStart, onDrop, baseX, baseY, dragX, dragY, dragging]);
+  }, [pieceSquare, squareSize, isWhiteOrient, onTap, onDragStart, onDrop, baseX, baseY, dragX, dragY, fingerOffsetX, fingerOffsetY, dragging, legalTargetsSV, indicatorsVisibleSV]);
 
   const animStyle = useAnimatedStyle(() => {
     const scale = 1 + dragging.value * (DRAG_SCALE - 1);
@@ -277,6 +319,16 @@ const AnimatedPiece = memo(function AnimatedPiece({
       zIndex: dragging.value > 0 ? 100 : 1,
     };
   });
+
+  useImperativeHandle(ref, () => ({
+    snapBack: (square?: string) => {
+      const t = squareToPixels(square ?? piece.square, squareSize, orientation);
+      baseX.value = t.x;
+      baseY.value = t.y;
+      dragX.value = 0;
+      dragY.value = 0;
+    },
+  }), [piece.square, squareSize, orientation, baseX, baseY, dragX, dragY]);
 
   return (
     <GestureDetector gesture={composed}>
@@ -302,6 +354,33 @@ const AnimatedPiece = memo(function AnimatedPiece({
       </Animated.View>
     </GestureDetector>
   );
+}));
+
+// ── Legal-target indicator ───────────────────────────────────────────────
+
+const LegalTargetIndicator = memo(function LegalTargetIndicator({
+  isCapture, squareSize, color, visibleSV,
+}: {
+  isCapture: boolean;
+  squareSize: number;
+  color: string;
+  visibleSV: { value: number };
+}) {
+  const style = useAnimatedStyle(() => ({ opacity: visibleSV.value }));
+  const shape: ViewStyle = isCapture
+    ? {
+        width: '92%', height: '92%', borderRadius: 999,
+        borderWidth: Math.max(2, squareSize * 0.08), borderColor: color,
+      }
+    : {
+        width: '30%', height: '30%', borderRadius: 999, backgroundColor: color,
+      };
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[{ position: 'absolute' }, shape, style]}
+    />
+  );
 });
 
 // ── Chessboard ───────────────────────────────────────────────────────────
@@ -317,8 +396,12 @@ export interface ChessboardMove {
 interface ChessboardProps {
   fen: string;
   orientation?: 'white' | 'black';
-  /** Tap-to-move or drag-to-move. */
-  onMove?: (move: ChessboardMove) => void;
+  /** Tap-to-move or drag-to-move. May return a boolean to synchronously signal
+   *  whether the parent accepted the move; `false` lets the board skip its
+   *  optimistic-capture hide so a rejected move doesn't flicker the captured
+   *  piece. Returning `void` keeps the existing optimistic behavior (with rAF
+   *  detection of FEN-based rejection). */
+  onMove?: (move: ChessboardMove) => unknown;
   disabled?: boolean;
   squareStyles?: Record<string, StyleProp<ViewStyle>>;
   darkSquareColor?: string;
@@ -345,12 +428,21 @@ export const Chessboard = memo(function Chessboard({
   const resolvedDark = darkSquareColor ?? colorTheme.board.dark;
   const resolvedLight = lightSquareColor ?? colorTheme.board.light;
   const [pieces, setPieces] = useState<PieceInstance[]>(() => initialPieces(fen));
+  const piecesRef = useRef(pieces);
+  piecesRef.current = pieces;
   const lastFenRef = useRef(fen);
+  const pieceHandlesRef = useRef<Map<string, AnimatedPieceHandle>>(new Map());
+  // Captured-piece id hidden optimistically on a legal capture drop so the
+  // captured piece doesn't flash over the user's piece while we wait for the
+  // parent to advance the FEN. Restored on parent rejection; cleared for real
+  // on FEN-driven reconciliation.
+  const [hiddenPieceId, setHiddenPieceId] = useState<string | null>(null);
 
   useEffect(() => {
     if (lastFenRef.current === fen) return;
     setPieces((prev) => reconcilePieces(prev, fen));
     lastFenRef.current = fen;
+    setHiddenPieceId(null);
   }, [fen]);
 
   const [measuredSize, setMeasuredSize] = useState(0);
@@ -363,16 +455,37 @@ export const Chessboard = memo(function Chessboard({
   const [selected, setSelected] = useState<string | null>(null);
   useEffect(() => { setSelected(null); }, [fen]);
 
+  // Map of legal target square → isCapture. Capture targets render as a ring,
+  // empty targets as a dot, matching the web indicator style.
   const legalTargets = useMemo(() => {
-    if (!selected) return new Set<string>();
+    if (!selected) return new Map<string, boolean>();
     try {
       const chess = new Chess(fen);
       const moves = chess.moves({ square: selected as any, verbose: true });
-      return new Set(moves.map((m: any) => m.to as string));
+      const out = new Map<string, boolean>();
+      for (const m of moves as any[]) {
+        out.set(m.to as string, !!chess.get(m.to as any) || (m.flags as string).includes('e'));
+      }
+      return out;
     } catch {
-      return new Set<string>();
+      return new Map<string, boolean>();
     }
   }, [selected, fen]);
+
+  // Worklet-readable mirror of legalTargets. The drag onEnd worklet uses it to
+  // decide whether to snap the piece to the release point (legal drop, parent
+  // will reposition via FEN change) or animate it back to source (illegal).
+  const legalTargetsSV = useSharedValue<Record<string, boolean>>({});
+  const indicatorsVisibleSV = useSharedValue(1);
+  useEffect(() => {
+    const map: Record<string, boolean> = {};
+    for (const sq of legalTargets.keys()) map[sq] = true;
+    legalTargetsSV.value = map;
+    // Re-show indicators whenever the selected piece changes (or selection
+    // clears and a new drag selects another piece). The drop worklet hides
+    // them; this restores visibility for the next selection.
+    indicatorsVisibleSV.value = 1;
+  }, [legalTargets, legalTargetsSV, indicatorsVisibleSV]);
 
   // Keep a ref to the latest interaction context so the callbacks we hand to
   // each AnimatedPiece can stay referentially stable. Otherwise every state
@@ -381,26 +494,28 @@ export const Chessboard = memo(function Chessboard({
   const ctxRef = useRef({ fen, selected, legalTargets, sideToMove, interactive, onMove });
   ctxRef.current = { fen, selected, legalTargets, sideToMove, interactive, onMove };
 
-  const tryMove = useCallback((from: string, to: string): boolean => {
+  // Returns { legal: boolean, acceptedHint: boolean | undefined } — acceptedHint
+  // is whatever the parent's onMove returned (undefined if it doesn't signal).
+  const tryMove = useCallback((from: string, to: string): { legal: boolean; acceptedHint: boolean | undefined } => {
     const ctx = ctxRef.current;
-    if (!ctx.interactive) return false;
+    if (!ctx.interactive) return { legal: false, acceptedHint: undefined };
     try {
       const chess = new Chess(ctx.fen);
       const result = chess.move({ from, to, promotion: 'q' });
       if (result) {
-        ctx.onMove?.({
+        const ret = ctx.onMove?.({
           san: result.san,
           uci: result.from + result.to + (result.promotion ?? ''),
           fen: chess.fen(),
           from: result.from,
           to: result.to,
         });
-        return true;
+        return { legal: true, acceptedHint: typeof ret === 'boolean' ? ret : undefined };
       }
     } catch {
       // ignore
     }
-    return false;
+    return { legal: false, acceptedHint: undefined };
   }, []);
 
   // Tap on a piece (via gesture on the AnimatedPiece overlay).
@@ -408,7 +523,7 @@ export const Chessboard = memo(function Chessboard({
     const { interactive, selected, legalTargets, fen, sideToMove } = ctxRef.current;
     if (!interactive) return;
     if (selected && legalTargets.has(sq)) {
-      if (tryMove(selected, sq)) setSelected(null);
+      if (tryMove(selected, sq).legal) setSelected(null);
       return;
     }
     const board = parseFen(fen);
@@ -426,7 +541,7 @@ export const Chessboard = memo(function Chessboard({
     const { interactive, selected, legalTargets } = ctxRef.current;
     if (!interactive) return;
     if (selected && legalTargets.has(sq)) {
-      if (tryMove(selected, sq)) setSelected(null);
+      if (tryMove(selected, sq).legal) setSelected(null);
       return;
     }
     if (selected) setSelected(null);
@@ -439,12 +554,64 @@ export const Chessboard = memo(function Chessboard({
   }, []);
 
   // Drag release: try the move; if not legal, the piece animates back to source.
+  // For drops where chess.js says the move is legal, the gesture's onEnd has
+  // already optimistically snapped the piece to the release point — but the
+  // parent may still reject the move (e.g. wrong line in Practice mode), in
+  // which case the FEN won't change. If that happens, animate the piece back
+  // to its source square so it doesn't sit stuck on top of the captured piece.
   const handlePieceDrop = useCallback((from: string, to: string | null) => {
     if (!ctxRef.current.interactive) return;
-    if (to && to !== from) tryMove(from, to);
-    // Clear regardless: successful move's fen change would clear anyway; on
-    // illegal drop we don't want the hover-dots lingering.
+    const fenBefore = ctxRef.current.fen;
+    const draggedId = piecesRef.current.find((p) => p.square === from)?.id ?? null;
+    const isLegalDrop = !!(to && to !== from && ctxRef.current.legalTargets.has(to));
+
+    // Call the parent first so we can use its return value to decide whether
+    // to apply optimistic UI. Parents that signal rejection synchronously let
+    // us skip the optimistic hide/move entirely — no flicker on wrong moves.
+    let acceptedHint: boolean | undefined = undefined;
+    if (to && to !== from) {
+      acceptedHint = tryMove(from, to).acceptedHint;
+    }
+    const definitelyRejected = acceptedHint === false;
+
+    let optimisticallyHidden: string | null = null;
+    let optimisticallyMoved = false;
+    if (isLegalDrop && !definitelyRejected) {
+      // Hide any captured opponent piece on the target square so it doesn't
+      // briefly cover the user's piece while the parent advances state.
+      const cap = piecesRef.current.find((p) => p.square === to && p.id !== draggedId);
+      if (cap) {
+        optimisticallyHidden = cap.id;
+        setHiddenPieceId(cap.id);
+      }
+      // Optimistically update the dragged piece's logical square to the drop
+      // target so reconcilePieces lines up correctly when the parent's next
+      // FEN backtracks. (Without this, Pass 1 of reconcile matches the piece
+      // to its still-at-source logical square, no useEffect fires, and baseX/Y
+      // stays stuck at the capture target.)
+      if (draggedId) {
+        optimisticallyMoved = true;
+        setPieces((prev) => prev.map((p) => p.id === draggedId ? { ...p, square: to } : p));
+      }
+    }
+
     setSelected(null);
+
+    if (definitelyRejected && draggedId && isLegalDrop) {
+      // Snap the piece straight back to source. No optimistic state to undo.
+      pieceHandlesRef.current.get(draggedId)?.snapBack(from);
+    } else if (acceptedHint === undefined && draggedId && to && to !== from) {
+      // Parent didn't signal — fall back to rAF detection of FEN-based rejection.
+      requestAnimationFrame(() => {
+        if (lastFenRef.current === fenBefore) {
+          pieceHandlesRef.current.get(draggedId)?.snapBack(from);
+          if (optimisticallyHidden) setHiddenPieceId(null);
+          if (optimisticallyMoved) {
+            setPieces((prev) => prev.map((p) => p.id === draggedId ? { ...p, square: from } : p));
+          }
+        }
+      });
+    }
   }, [tryMove]);
 
   function onBoardLayout(e: LayoutChangeEvent) {
@@ -469,7 +636,9 @@ export const Chessboard = memo(function Chessboard({
             const sq = squareId(row, col);
             const extraStyle = squareStyles ? squareStyles[sq] : null
             const isSelected = selected === sq;
-            const isLegalTarget = legalTargets.has(sq);
+            const captureHere = legalTargets.get(sq);
+            const isLegalTarget = captureHere !== undefined;
+            const isCaptureTarget = captureHere === true;
             const baseBg = isLight ? resolvedLight : resolvedDark;
             return (
               <Pressable
@@ -484,15 +653,11 @@ export const Chessboard = memo(function Chessboard({
                 }, extraStyle]}
               >
                 {isLegalTarget && (
-                  <View
-                    pointerEvents="none"
-                    style={{
-                      position: 'absolute',
-                      width: '30%',
-                      height: '30%',
-                      borderRadius: 999,
-                      backgroundColor: colorTheme.accent.default + 'AA',
-                    }}
+                  <LegalTargetIndicator
+                    isCapture={isCaptureTarget}
+                    squareSize={squareSize}
+                    color={colorTheme.accent.default + 'AA'}
+                    visibleSV={indicatorsVisibleSV}
                   />
                 )}
               </Pressable>
@@ -502,15 +667,21 @@ export const Chessboard = memo(function Chessboard({
       ))}
 
       {/* Animated piece overlays */}
-      {squareSize > 0 && pieces.map((p) => (
+      {squareSize > 0 && pieces.filter((p) => p.id !== hiddenPieceId).map((p) => (
         <AnimatedPiece
           key={p.id}
+          ref={(h) => {
+            if (h) pieceHandlesRef.current.set(p.id, h);
+            else pieceHandlesRef.current.delete(p.id);
+          }}
           piece={p}
           squareSize={squareSize}
           orientation={orientation}
           onTap={handlePieceTap}
           onDragStart={handlePieceDragStart}
           onDrop={handlePieceDrop}
+          legalTargetsSV={legalTargetsSV}
+          indicatorsVisibleSV={indicatorsVisibleSV}
         />
       ))}
 

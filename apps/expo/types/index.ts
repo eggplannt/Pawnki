@@ -35,7 +35,9 @@ export interface TranspositionTarget {
   sameOpening: boolean;
 }
 
-export interface ReviewCard {
+/** Row in the `review_cards` table — represents one review schedule for a
+ *  learned position. Table name is legacy; in code we call these reviews. */
+export interface Review {
   id: string;
   user_id: string;
   node_id: string;

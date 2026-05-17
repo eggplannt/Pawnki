@@ -12,7 +12,7 @@ import {
   findTransposition, findIntraOpeningTransposition,
   linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical, getTranspositionTargets, getFirstChildId, positionKey,
 } from '@/lib/openings';
-import { getLearnedNodeIds } from '@/lib/review-cards';
+import { getLearnedNodeIds } from '@/lib/reviews';
 import { computeApplicableCounts, computeLearnableMap } from '@/lib/practice';
 import {
   importPgnToOpening,
@@ -154,6 +154,8 @@ export default function OpeningDetail() {
   const [saving, setSaving] = useState(false);
   const [pendingFen, setPendingFen] = useState<string | null>(null);
   const [highlightSquares, setHighlightSquares] = useState<Record<string, React.CSSProperties>>({});
+  // Square the user has tapped for click-to-move (parallel to drag selection).
+  const [activeSquare, setActiveSquare] = useState<string | null>(null);
 
   const [editingAnnotation, setEditingAnnotation] = useState(false);
   const [annotationDraft, setAnnotationDraft] = useState('');
@@ -270,6 +272,8 @@ export default function OpeningDetail() {
     setEditingAnnotation(false);
     setPendingFen(null);
     setContextMenu(null);
+    setActiveSquare(null);
+    setHighlightSquares({});
   }, []);
 
   const goToStart = useCallback(() => {
@@ -447,16 +451,19 @@ export default function OpeningDetail() {
 
   // ── Board interaction ────────────────────────────────────────────────────
 
-  const handlePieceDrop = useCallback(({ sourceSquare, targetSquare }: {
-    piece: unknown;
-    sourceSquare: string;
-    targetSquare: string | null;
-  }): boolean => {
-    setHighlightSquares({});
-    if (!currentNode || !id || saving || !targetSquare) return false;
+  const tryApplyMove = useCallback((sourceSquare: string, targetSquare: string): boolean => {
+    if (!currentNode || !id || saving) return false;
 
     const chess = new Chess(currentNode.fen);
-    const result = chess.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+    // chess.js v1 throws on illegal moves. If we let the throw escape from
+    // onPieceDrop, react-chessboard's drag cleanup is skipped and the piece
+    // is left at opacity 0.5 (the dragging-ghost style).
+    let result;
+    try {
+      result = chess.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+    } catch {
+      result = null;
+    }
     if (!result) return false;
 
     const newFen = chess.fen();
@@ -490,11 +497,67 @@ export default function OpeningDetail() {
     return true;
   }, [currentNode, id, saving]);
 
-  const canDragPiece = useCallback(({ piece }: { isSparePiece: boolean; piece: { pieceType: string }; square: string | null }): boolean => {
-    if (!currentNode || saving) return false;
+  const handlePieceDrop = useCallback(({ sourceSquare, targetSquare }: {
+    piece: unknown;
+    sourceSquare: string;
+    targetSquare: string | null;
+  }): boolean => {
+    setHighlightSquares({});
+    setActiveSquare(null);
+    if (!targetSquare) return false;
+    return tryApplyMove(sourceSquare, targetSquare);
+  }, [tryApplyMove]);
+
+  const isUserPiece = useCallback((piece: { pieceType: string } | null | undefined): boolean => {
+    if (!currentNode || !piece) return false;
     const { isWhite } = fenInfo(currentNode.fen);
     return isWhite === (piece.pieceType[0] === 'w');
-  }, [currentNode, saving]);
+  }, [currentNode]);
+
+  // Click-to-move: tap own piece to select; tap another square to move (or
+  // switch selection if it's another own piece); tap same square to deselect.
+  const showLegalForSquare = useCallback((square: string) => {
+    if (!currentNode) return;
+    const targets = getLegalMoveSquares(currentNode.fen, square);
+    const styles: Record<string, React.CSSProperties> = {};
+    const chess = new Chess(currentNode.fen);
+    for (const target of targets) {
+      const isCapture = chess.get(target as any);
+      styles[target] = isCapture
+        ? { background: `radial-gradient(circle, transparent 55%, ${colors.accent.default} 55%, ${colors.accent.default} 68%, transparent 68%)` }
+        : { background: `radial-gradient(circle, ${colors.accent.default} 25%, transparent 25%)`, opacity: 0.8 };
+    }
+    setHighlightSquares(styles);
+  }, [currentNode, colors]);
+
+  const handleSquareClick = useCallback(({ square, piece }: { square: string | null; piece: { pieceType: string } | null }) => {
+    if (!currentNode || saving || !square) return;
+    if (activeSquare && square !== activeSquare) {
+      if (isUserPiece(piece)) {
+        setActiveSquare(square);
+        showLegalForSquare(square);
+        return;
+      }
+      tryApplyMove(activeSquare, square);
+      setActiveSquare(null);
+      setHighlightSquares({});
+      return;
+    }
+    if (square === activeSquare) {
+      setActiveSquare(null);
+      setHighlightSquares({});
+      return;
+    }
+    if (isUserPiece(piece)) {
+      setActiveSquare(square);
+      showLegalForSquare(square);
+    }
+  }, [currentNode, saving, activeSquare, isUserPiece, tryApplyMove, showLegalForSquare]);
+
+  const canDragPiece = useCallback(({ piece }: { isSparePiece: boolean; piece: { pieceType: string }; square: string | null }): boolean => {
+    if (!currentNode || saving) return false;
+    return isUserPiece(piece);
+  }, [currentNode, saving, isUserPiece]);
 
   // ── Annotation save ──────────────────────────────────────────────────────
 
@@ -769,9 +832,19 @@ export default function OpeningDetail() {
                   },
                   darkSquareStyle: { backgroundColor: colors.board.dark },
                   lightSquareStyle: { backgroundColor: colors.board.light },
-                  squareStyles: highlightSquares,
+                  squareStyles: activeSquare
+                    ? {
+                        ...highlightSquares,
+                        [activeSquare]: {
+                          backgroundColor: 'rgb(var(--color-accent) / 0.5)',
+                          boxShadow: 'inset 0 0 0 4px rgb(var(--color-accent))',
+                          ...(highlightSquares[activeSquare] ?? {}),
+                        },
+                      }
+                    : highlightSquares,
                   onPieceDrop: handlePieceDrop,
                   onPieceDrag: handlePieceDrag,
+                  onSquareClick: handleSquareClick,
                   canDragPiece: canDragPiece,
                   dropSquareStyle: { backgroundColor: colors.accent.dim },
                 }}

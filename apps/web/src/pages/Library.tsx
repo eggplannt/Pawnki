@@ -4,7 +4,7 @@ import Icon from '@mdi/react';
 import { mdiChessKing } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
 import { listOpenings, deleteOpening, getLearnableCountsByOpening } from '@/lib/openings';
-import { getLearnedCountsByOpening } from '@/lib/review-cards';
+import { getLearnedCountsByOpening } from '@/lib/reviews';
 import type { Opening } from '@/types';
 
 type Tab = 'white' | 'black';
@@ -155,7 +155,7 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
   }
 
   return (
-    <div className="relative bg-bg-surface border border-border rounded-xl overflow-hidden hover:border-accent/40 transition-all group hover:shadow-md hover:shadow-black/10">
+    <div className="relative bg-bg-surface border border-border rounded-xl hover:border-accent/40 transition-all group hover:shadow-md hover:shadow-black/10">
       {/* Color stripe at top */}
       <div className={`h-1 rounded-t-xl ${isWhite ? 'bg-gold' : 'bg-accent'}`} />
 

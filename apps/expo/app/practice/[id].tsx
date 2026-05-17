@@ -14,7 +14,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { getOpening, getNodes, buildTree } from '@/lib/openings';
-import { getLearnedNodeIds, insertReviewCards } from '@/lib/review-cards';
+import { getLearnedNodeIds, markPositionsLearned } from '@/lib/reviews';
 import {
   startSession,
   attemptMove,
@@ -31,6 +31,40 @@ import { useColorTheme } from '@/hooks/useColorTheme';
 import type { Node, Opening } from '@/types';
 
 const OPPONENT_DELAY_MS = 300;
+
+/**
+ * Learn mode: walk forward through every move that would otherwise auto-play
+ * (opponent replies + user moves the user already knows or forced non-teaching
+ * choices) until we hit a stop — teaching move, real branching decision,
+ * completion, or backtrack-stuck. Returns the final session + step count.
+ */
+function fastForwardLearn(start: PracticeSession): { session: PracticeSession; steps: number } {
+  let cur = start;
+  let steps = 0;
+  while (steps < 256) {
+    if (cur.status === 'complete') break;
+    if (cur.status === 'opponent-to-move') {
+      const next = opponentMove(cur).session;
+      if (next === cur || next.currentNode.id === cur.currentNode.id) break;
+      cur = next;
+      steps++;
+      continue;
+    }
+    const applicable = applicableChildren(cur);
+    if (applicable.length !== 1) break;
+    const target = applicable[0];
+    const targetLearnable = cur.learnableMap.get(target.id) ?? false;
+    const isTeaching = targetLearnable && !cur.options.learnedNodeIds.has(target.id);
+    if (isTeaching) break;
+    const san = target.move_san;
+    if (!san) break;
+    const next = attemptMove(cur, san).session;
+    if (next === cur || next.currentNode.id === cur.currentNode.id) break;
+    cur = next;
+    steps++;
+  }
+  return { session: cur, steps };
+}
 
 function findNodeById(root: Node, id: string): Node | null {
   if (root.id === id) return root;
@@ -106,42 +140,34 @@ export default function PracticeScreen() {
 
   useEffect(() => () => { if (bannerTimer.current) clearTimeout(bannerTimer.current); }, []);
 
-  // ── Opponent auto-play ────────────────────────────────────────────────────
-
+  // ── Auto-advance (opponent + learn-mode auto-skip) ────────────────────────
+  //
+  // Practice mode: one opponent move at a time with a 300ms animation delay.
+  //
+  // Learn mode: collapse the chain of auto-played moves (opponent replies +
+  // known/forced user moves) into a single transition. If exactly one move
+  // separates the current position from the next teaching/decision stop, we
+  // animate it. If two or more — e.g. opponent reply + walked-through known
+  // line, or a long jump back into another subtree after backtracking — we
+  // jump straight to the next stop without animating intermediate steps.
   useEffect(() => {
-    if (!session || session.status !== 'opponent-to-move') return;
-    const t = setTimeout(() => {
-      setSession((s) => {
-        if (!s || s.status !== 'opponent-to-move') return s;
-        return opponentMove(s).session;
-      });
-    }, OPPONENT_DELAY_MS);
-    return () => clearTimeout(t);
-  }, [session?.status, session?.currentNode.id]);
+    if (!session || session.status === 'complete') return;
 
-  // ── Learn-mode auto-skip ──────────────────────────────────────────────────
-  // "From beginning" doesn't mean making the user replay the entire opening.
-  // It means: traverse the tree, only stopping where something still needs to
-  // be learned. Auto-play through user moves the user already knows (learned
-  // learnables) and through forced branching choices.
-  useEffect(() => {
-    if (!session || session.status !== 'awaiting-user') return;
-    if (session.options.mode !== 'learn') return;
-    const applicable = applicableChildren(session);
-    if (applicable.length !== 1) return;
-    const target = applicable[0];
-    const targetLearnable = session.learnableMap.get(target.id) ?? false;
-    const isTeachingMove = targetLearnable && !session.options.learnedNodeIds.has(target.id);
-    if (isTeachingMove) return;
-    const san = target.move_san;
-    if (!san) return;
-    const t = setTimeout(() => {
-      setSession((s) => {
-        if (!s || s.status !== 'awaiting-user') return s;
-        return attemptMove(s, san).session;
-      });
-    }, OPPONENT_DELAY_MS);
-    return () => clearTimeout(t);
+    if (session.options.mode === 'practice') {
+      if (session.status !== 'opponent-to-move') return;
+      const t = setTimeout(() => {
+        setSession((s) => (s && s.status === 'opponent-to-move' ? opponentMove(s).session : s));
+      }, OPPONENT_DELAY_MS);
+      return () => clearTimeout(t);
+    }
+
+    const { session: target, steps } = fastForwardLearn(session);
+    if (steps === 0) return;
+    if (steps === 1) {
+      const t = setTimeout(() => setSession(target), OPPONENT_DELAY_MS);
+      return () => clearTimeout(t);
+    }
+    setSession(target);
   }, [session?.status, session?.currentNode.id]);
 
   // ── Finalize on complete ─────────────────────────────────────────────────
@@ -156,7 +182,7 @@ export default function PracticeScreen() {
         : [];
     (async () => {
       try {
-        if (toInsert.length > 0) await insertReviewCards(toInsert);
+        if (toInsert.length > 0) await markPositionsLearned(toInsert);
       } catch (e: any) {
         showBanner(`Couldn't save progress: ${e?.message ?? e}`, 'err');
       } finally {
@@ -174,13 +200,13 @@ export default function PracticeScreen() {
 
   // ── Move handler ──────────────────────────────────────────────────────────
 
-  const handleMove = useCallback((move: ChessboardMove) => {
-    if (!session || session.status !== 'awaiting-user') return;
+  const handleMove = useCallback((move: ChessboardMove): boolean => {
+    if (!session || session.status !== 'awaiting-user') return false;
     const out = attemptMove(session, move.san);
     setSession(out.session);
     if (out.verdict === 'correct') {
       if (mode === 'learn' && session.wrongAttemptsHere > 0) {
-        showBanner('Correct — but you stumbled. We\'ll re-ask this at the end.', 'info');
+        showBanner('Correct — but you stumbled. We\'ll re-ask this at the end.', 'info', 3500);
       }
       else showBanner('Correct', 'info', 500);
     } else if (out.verdict === 'wrong') {
@@ -190,6 +216,7 @@ export default function PracticeScreen() {
     } else if (out.verdict === 'wrong-mode') {
       showBanner(out.reason ?? 'Not allowed in this mode.', 'warn');
     }
+    return out.verdict === 'correct';
   }, [session, showBanner]);
 
   const handleHint = useCallback(() => {
@@ -303,7 +330,10 @@ export default function PracticeScreen() {
     <SafeAreaView className="flex-1 bg-bg-base">
       {/* Header */}
       <View className="flex-row items-center gap-2 px-4 py-2">
-        <Pressable onPress={() => router.back()} className="w-8 h-8 items-center justify-center rounded-lg active:bg-bg-elevated">
+        <Pressable
+          onPress={isLearn && session.status !== 'complete' ? handleEndEarly : () => router.back()}
+          className="w-8 h-8 items-center justify-center rounded-lg active:bg-bg-elevated"
+        >
           <MaterialCommunityIcons name="arrow-left" size={20} color={colorTheme.content.muted} />
         </Pressable>
         <View
@@ -351,9 +381,13 @@ export default function PracticeScreen() {
             <Text className="text-content-secondary text-xs font-medium">End early</Text>
           </Pressable>
         )}
-        <Pressable onPress={session.status === 'awaiting-user' ? handleHint : ()=>{}} className="px-2 py-1 rounded-md bg-accent/10 active:bg-accent/20">
-          <Text className="text-accent text-xs font-medium">Hint</Text>
-        </Pressable>
+        {session.status === 'awaiting-user' && session.hintLevel < 2 && (
+          <Pressable onPress={handleHint} className="px-2 py-1 rounded-md bg-accent/10 active:bg-accent/20">
+            <Text className="text-accent text-xs font-medium">
+              {session.hintLevel === 0 ? 'Hint' : 'Show answer'}
+            </Text>
+          </Pressable>
+        )}
       </View>
 
 

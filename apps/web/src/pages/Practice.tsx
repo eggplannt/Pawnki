@@ -4,7 +4,7 @@ import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import { AppShell } from '@/components/AppShell';
 import { getOpening, getNodes, buildTree } from '@/lib/openings';
-import { getLearnedNodeIds, insertReviewCards } from '@/lib/review-cards';
+import { getLearnedNodeIds, markPositionsLearned } from '@/lib/reviews';
 import {
   startSession,
   attemptMove,
@@ -17,6 +17,7 @@ import {
   type SessionSummary,
 } from '@/lib/practice';
 import { useColorTheme } from '@/hooks/useColorTheme';
+import { legalTargetStyles } from '@/lib/board-highlights';
 import type { Node, Opening } from '@/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -47,6 +48,43 @@ class BoardErrorBoundary extends Component<BoardErrorBoundaryProps, { errored: b
 
 const OPPONENT_DELAY_MS = 300;
 
+/**
+ * Learn mode: walk the session forward through every move that would otherwise
+ * auto-play (opponent replies + user moves the user already knows or forced
+ * non-teaching choices) until we hit a stop — i.e. a teaching move, a real
+ * branching decision, completion, or backtrack-stuck state. Returns the final
+ * session plus the number of steps taken. Pure; doesn't mutate input.
+ */
+function fastForwardLearn(start: PracticeSession): { session: PracticeSession; steps: number } {
+  let cur = start;
+  let steps = 0;
+  // Safety cap so a buggy state can't loop forever.
+  while (steps < 256) {
+    if (cur.status === 'complete') break;
+    if (cur.status === 'opponent-to-move') {
+      const next = opponentMove(cur).session;
+      if (next === cur || next.currentNode.id === cur.currentNode.id) break;
+      cur = next;
+      steps++;
+      continue;
+    }
+    // awaiting-user
+    const applicable = applicableChildren(cur);
+    if (applicable.length !== 1) break; // user has a real choice → stop
+    const target = applicable[0];
+    const targetLearnable = cur.learnableMap.get(target.id) ?? false;
+    const isTeaching = targetLearnable && !cur.options.learnedNodeIds.has(target.id);
+    if (isTeaching) break; // first time encountering this answer → stop and ask
+    const san = target.move_san;
+    if (!san) break;
+    const next = attemptMove(cur, san).session;
+    if (next === cur || next.currentNode.id === cur.currentNode.id) break;
+    cur = next;
+    steps++;
+  }
+  return { session: cur, steps };
+}
+
 export default function Practice() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -63,6 +101,9 @@ export default function Practice() {
   const [banner, setBanner] = useState<{ text: string; kind: 'info' | 'warn' | 'err' } | null>(null);
   const [revealedSans, setRevealedSans] = useState<string[] | null>(null);
   const [hintSquares, setHintSquares] = useState<Record<string, React.CSSProperties>>({});
+  // Square the user is actively grabbing or has tapped — drawn green so the
+  // selection is obvious instead of the piece just going semi-transparent.
+  const [activeSquare, setActiveSquare] = useState<string | null>(null);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [savingFinalize, setSavingFinalize] = useState(false);
   const [confirmEndEarly, setConfirmEndEarly] = useState(false);
@@ -119,43 +160,39 @@ export default function Practice() {
 
   useEffect(() => () => { if (bannerTimer.current) clearTimeout(bannerTimer.current); }, []);
 
-  // ── Opponent auto-play ───────────────────────────────────────────────────
-
+  // ── Auto-advance (opponent moves + learn-mode auto-skip) ─────────────────
+  //
+  // Practice mode: opponent plays one move at a time with a 300ms delay so the
+  // user sees each move animate.
+  //
+  // Learn mode: we collapse chains of auto-played moves (opponent replies plus
+  // user moves that are already learned or non-teaching forced choices) into a
+  // single transition. If exactly one auto move separates the current position
+  // from the next teaching/decision stop, we animate it with the usual delay.
+  // If two or more separate them — e.g. opponent reply + walked-through
+  // known line, or a long jump back to another subtree after backtracking —
+  // we skip straight to the next stop without animating intermediate steps.
+  // (Walking the board through positions the user knows is noise.)
   useEffect(() => {
-    if (!session) return;
-    if (session.status !== 'opponent-to-move') return;
-    const t = setTimeout(() => {
-      setSession((s) => {
-        if (!s || s.status !== 'opponent-to-move') return s;
-        const { session: next } = opponentMove(s);
-        return next;
-      });
-    }, OPPONENT_DELAY_MS);
-    return () => clearTimeout(t);
-  }, [session?.status, session?.currentNode.id]);
+    if (!session || session.status === 'complete') return;
 
-  // ── Learn-mode auto-skip ─────────────────────────────────────────────────
-  // "From beginning" doesn't mean replaying the entire opening — it means
-  // learning what's left in this subtree. Auto-play user moves the user has
-  // already learned (and forced branching choices).
-  useEffect(() => {
-    if (!session || session.status !== 'awaiting-user') return;
-    if (session.options.mode !== 'learn') return;
-    const applicable = applicableChildren(session);
-    if (applicable.length !== 1) return;
-    const target = applicable[0];
-    const targetLearnable = session.learnableMap.get(target.id) ?? false;
-    const isTeachingMove = targetLearnable && !session.options.learnedNodeIds.has(target.id);
-    if (isTeachingMove) return;
-    const san = target.move_san;
-    if (!san) return;
-    const t = setTimeout(() => {
-      setSession((s) => {
-        if (!s || s.status !== 'awaiting-user') return s;
-        return attemptMove(s, san).session;
-      });
-    }, OPPONENT_DELAY_MS);
-    return () => clearTimeout(t);
+    if (session.options.mode === 'practice') {
+      if (session.status !== 'opponent-to-move') return;
+      const t = setTimeout(() => {
+        setSession((s) => (s && s.status === 'opponent-to-move' ? opponentMove(s).session : s));
+      }, OPPONENT_DELAY_MS);
+      return () => clearTimeout(t);
+    }
+
+    // Learn mode — fast-forward the entire auto-chain in one pass.
+    const { session: target, steps } = fastForwardLearn(session);
+    if (steps === 0) return;
+    if (steps === 1) {
+      const t = setTimeout(() => setSession(target), OPPONENT_DELAY_MS);
+      return () => clearTimeout(t);
+    }
+    // Multi-hop: jump silently to the destination, no intermediate redraws.
+    setSession(target);
   }, [session?.status, session?.currentNode.id]);
 
   // ── Detect completion → finalize ─────────────────────────────────────────
@@ -172,7 +209,7 @@ export default function Practice() {
         : [];
     (async () => {
       try {
-        if (toInsert.length > 0) await insertReviewCards(toInsert);
+        if (toInsert.length > 0) await markPositionsLearned(toInsert);
       } catch (e: any) {
         showBanner(`Couldn't save progress: ${e?.message ?? e}`, 'err');
       } finally {
@@ -188,31 +225,33 @@ export default function Practice() {
   useEffect(() => {
     setHintSquares({});
     setRevealedSans(null);
+    setActiveSquare(null);
   }, [session?.currentNode.id]);
 
   // ── User move (drag) ─────────────────────────────────────────────────────
 
-  const handlePieceDrop = useCallback(({ sourceSquare, targetSquare }: {
-    piece: unknown; sourceSquare: string; targetSquare: string | null;
-  }): boolean => {
-    if (!session || !targetSquare || session.status !== 'awaiting-user') return false;
+  const tryMove = useCallback((from: string, to: string): boolean => {
+    if (!session || session.status !== 'awaiting-user') return false;
     const chess = new Chess(session.currentNode.fen);
-    const result = chess.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+    // chess.js v1 throws on illegal moves; let it surface as a normal "invalid".
+    // Letting the throw escape would break react-chessboard's drag cleanup
+    // (the dropped piece keeps the dragging-ghost opacity).
+    let result;
+    try {
+      result = chess.move({ from, to, promotion: 'q' });
+    } catch {
+      result = null;
+    }
     if (!result) {
-      showBanner("Invalid Move", 'err');
+      showBanner('Invalid Move', 'err');
       return false;
     }
-    const san = result.san;
-    result.san
-    const out = attemptMove(session, san );
+    const out = attemptMove(session, result.san);
     setSession(out.session);
     if (out.verdict === 'correct') {
-      // If we're in learn mode and this came after a wrong attempt, the move
-      // got queued for re-prompt — tell the user.
       if (mode === 'learn' && session.wrongAttemptsHere > 0) {
-        showBanner('Correct — but you stumbled. We\'ll re-ask this at the end.', 'info');
-      }
-      else showBanner('Correct', 'info', 500);
+        showBanner('Correct — but you stumbled. We\'ll re-ask this at the end.', 'info', 3500);
+      } else showBanner('Correct', 'info', 500);
     } else if (out.verdict === 'wrong') {
       setShakeKey((k) => k + 1);
       showBanner(out.reason ?? 'Wrong move.', 'err');
@@ -222,13 +261,48 @@ export default function Practice() {
       showBanner(out.reason ?? 'Not allowed in this mode.', 'warn');
     }
     return out.verdict === 'correct';
-  }, [session, showBanner]);
+  }, [session, mode, showBanner]);
 
-  const canDragPiece = useCallback(({ piece }: { piece: { pieceType: string } }): boolean => {
-    if (!session || session.status !== 'awaiting-user') return false;
+  const handlePieceDrop = useCallback(({ sourceSquare, targetSquare }: {
+    piece: unknown; sourceSquare: string; targetSquare: string | null;
+  }): boolean => {
+    if (!targetSquare) return false;
+    return tryMove(sourceSquare, targetSquare);
+  }, [tryMove]);
+
+  const isUserPiece = useCallback((piece: { pieceType: string } | null | undefined): boolean => {
+    if (!session || !piece) return false;
     const userIsWhite = session.options.userColor === 'white';
     return userIsWhite === (piece.pieceType[0] === 'w');
   }, [session]);
+
+  const canDragPiece = useCallback(({ piece }: { piece: { pieceType: string } }): boolean => {
+    if (!session || session.status !== 'awaiting-user') return false;
+    return isUserPiece(piece);
+  }, [session, isUserPiece]);
+
+  // Click-to-move: first click on a user piece selects it; next click on a
+  // different square attempts the move; clicking another user piece switches
+  // selection; clicking the same square or elsewhere clears.
+  const handleSquareClick = useCallback((args: { square: string | null; piece: { pieceType: string } | null }) => {
+    if (!session || session.status !== 'awaiting-user' || !args.square) return;
+    const { square, piece } = args;
+    if (activeSquare && square !== activeSquare) {
+      // Switch selection if user clicks one of their own pieces; otherwise treat as move target.
+      if (isUserPiece(piece)) {
+        setActiveSquare(square);
+        return;
+      }
+      tryMove(activeSquare, square);
+      setActiveSquare(null);
+      return;
+    }
+    if (square === activeSquare) {
+      setActiveSquare(null);
+      return;
+    }
+    if (isUserPiece(piece)) setActiveSquare(square);
+  }, [session, activeSquare, isUserPiece, tryMove]);
 
   // ── Hint button ──────────────────────────────────────────────────────────
 
@@ -301,6 +375,11 @@ export default function Practice() {
     return out;
   }, [session, colors]);
 
+  const legalSquareStyles = useMemo(() => {
+    if (!session || session.status !== 'awaiting-user' || !activeSquare) return {};
+    return legalTargetStyles(session.currentNode.fen, activeSquare, colors.accent.default);
+  }, [session, activeSquare, colors]);
+
   const orientation = opening?.color === 'white' ? 'white' : 'black';
   // Overlay X badges at the MIDPOINT of each danger arrow. The to-square may
   // be a legal destination for another piece, so the X must sit on the arrow.
@@ -355,9 +434,19 @@ export default function Practice() {
       <div className="flex-1 flex flex-col items-center p-3 lg:p-6 lg:justify-center overflow-hidden">
         {/* Header */}
         <div className="w-full max-w-[640px] flex items-center gap-2 mb-2">
-          <Link to={`/library/${id}`} className="w-8 h-8 flex items-center justify-center rounded-lg text-content-muted hover:text-content-primary hover:bg-bg-elevated">
-            ←
-          </Link>
+          {mode === 'learn' && session.status !== 'complete' ? (
+            <button
+              onClick={handleEndEarly}
+              className="w-8 h-8 flex items-center justify-center rounded-lg text-content-muted hover:text-content-primary hover:bg-bg-elevated"
+              title="End learning early (saves first-try positions)"
+            >
+              ←
+            </button>
+          ) : (
+            <Link to={`/library/${id}`} className="w-8 h-8 flex items-center justify-center rounded-lg text-content-muted hover:text-content-primary hover:bg-bg-elevated">
+              ←
+            </Link>
+          )}
           <span className={`px-2 py-0.5 text-xs font-medium rounded ${modeBadgeColor}`}>
             {mode === 'learn' ? 'Learn' : 'Practice'}
           </span>
@@ -400,12 +489,12 @@ export default function Practice() {
               End early
             </button>
           )}
-          {session.status === 'awaiting-user' && (
+          {session.status === 'awaiting-user' && session.hintLevel < 2 && (
             <button
               onClick={handleHint}
               className="px-2 py-1 text-xs rounded-md bg-accent/10 hover:bg-accent/20 text-accent"
             >
-              {session.hintLevel === 0 ? 'Hint (piece)' : session.hintLevel === 1 ? 'Hint (answer)' : 'Hint shown'}
+              {session.hintLevel === 0 ? 'Hint' : 'Show answer'}
             </button>
           )}
         </div>
@@ -430,9 +519,28 @@ export default function Practice() {
                 boardStyle: { borderRadius: '8px', boxShadow: '0 4px 20px rgba(0,0,0,0.3)' },
                 darkSquareStyle: { backgroundColor: colors.board.dark },
                 lightSquareStyle: { backgroundColor: colors.board.light },
-                squareStyles: hintSquares,
-                arrows: doneArrows,
-                onPieceDrop: handlePieceDrop,
+                squareStyles: activeSquare
+                  ? {
+                      ...legalSquareStyles,
+                      ...hintSquares,
+                      [activeSquare]: {
+                        // Background + inset ring so the highlight is visible
+                        // around the (semi-transparent during drag) piece.
+                        backgroundColor: 'rgb(var(--color-accent) / 0.5)',
+                        boxShadow: 'inset 0 0 0 4px rgb(var(--color-accent))',
+                        ...(hintSquares[activeSquare] ?? {}),
+                      },
+                    }
+                  : hintSquares,
+                arrows: mode === "learn" ? [] : doneArrows,
+                onPieceDrop: (args) => {
+                  setActiveSquare(null);
+                  return handlePieceDrop(args);
+                },
+                onPieceDrag: ({ square }: { square: string | null }) => {
+                  if (square) setActiveSquare(square);
+                },
+                onSquareClick: handleSquareClick,
                 canDragPiece: canDragPiece,
                 dropSquareStyle: { backgroundColor: colors.accent.dim },
               }}

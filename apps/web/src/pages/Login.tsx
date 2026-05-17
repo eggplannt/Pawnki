@@ -1,11 +1,11 @@
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme } from '@/hooks/useColorTheme';
-import { PawnTreeLogo, PawnTreeIcon } from '@/components/Logo';
+import { PawnTreeLogo } from '@/components/Logo';
 import { useState } from 'react';
 
 const FEATURES = [
   { icon: '♟', text: 'Import or build opening trees from PGN' },
-  { icon: '⚔', text: 'Depth-first practice drills' },
+  { icon: '⚔', text: 'Drill style practice and learning' },
   { icon: '✦', text: 'Anki-style daily review sessions' },
 ];
 
@@ -91,13 +91,6 @@ export default function Login() {
             <p className="text-content-muted text-xs text-center mt-6 leading-5">
               By signing in you agree to the terms of service.
             </p>
-          </div>
-
-          {/* Decorative pawns */}
-          <div className="flex justify-center gap-2 mt-4 opacity-20">
-            {[...Array(5)].map((_, i) => (
-              <PawnTreeIcon key={i} size={16} />
-            ))}
           </div>
         </div>
       </div>

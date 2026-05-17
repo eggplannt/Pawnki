@@ -41,7 +41,7 @@ export default function LoginScreen() {
         <View className="mb-10 gap-3">
           {([
             { icon: 'chess-pawn', text: 'Import or build opening trees from PGN' },
-            { icon: 'sword-cross', text: 'Depth-first practice drills' },
+            { icon: 'sword-cross', text: 'Drill-style practice and learning' },
             { icon: 'star-four-points-outline', text: 'Anki-style daily review sessions' },
           ] as const).map(({ icon, text }) => (
             <View key={text} className="flex-row items-center gap-3">

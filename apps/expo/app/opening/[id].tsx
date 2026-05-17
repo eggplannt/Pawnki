@@ -28,7 +28,7 @@ import {
   type CrossTranspositionMatch,
   type IntraTranspositionMatch,
 } from '@/lib/openings';
-import { getLearnedNodeIds } from '@/lib/review-cards';
+import { getLearnedNodeIds } from '@/lib/reviews';
 import { computeApplicableCounts, computeLearnableMap } from '@/lib/practice';
 import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chessboard, type ChessboardMove } from '@/components/Chessboard';
