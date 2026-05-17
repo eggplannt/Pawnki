@@ -1,4 +1,4 @@
-import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Component, createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chess } from 'chess.js';
@@ -187,6 +187,19 @@ export default function OpeningDetail() {
 
   const parentMap = useMemo(() => (tree ? buildParentMap(tree) : new Map<string, Node>()), [tree]);
 
+  // id → Node for O(1) lookup. Replaces findNodeById's O(tree) DFS on
+  // transposition-jump and nav-history-pop paths.
+  const nodeMap = useMemo(() => {
+    const m = new Map<string, Node>();
+    if (!tree) return m;
+    function walk(n: Node) {
+      m.set(n.id, n);
+      for (const c of n.children ?? []) walk(c);
+    }
+    walk(tree);
+    return m;
+  }, [tree]);
+
   // Collect every link node in the current tree.
   const linkEntries = useMemo(() => {
     const out: { linkId: string; targetId: string; node: Node }[] = [];
@@ -299,7 +312,7 @@ export default function OpeningDetail() {
           // Intra-opening: jump past the canonical to its first child —
           // otherwise the position doesn't change and the board looks frozen.
           if (tree) {
-            const targetInTree = findNodeById(tree, target.node.id);
+            const targetInTree = nodeMap.get(target.node.id) ?? null;
             if (targetInTree) {
               const landing = targetInTree.children?.[0] ?? targetInTree;
               navHistory.push({
@@ -334,7 +347,7 @@ export default function OpeningDetail() {
       setCurrentNode(currentNode.children[0]);
       setForwardStack([]);
     }
-  }, [currentNode, forwardStack, parentMap, transTargets, id, tree, navHistory]);
+  }, [currentNode, forwardStack, parentMap, transTargets, id, tree, navHistory, nodeMap]);
 
   const goPrev = useCallback(() => {
     if (!currentNode || !id) return;
@@ -345,7 +358,7 @@ export default function OpeningDetail() {
     if (popped) {
       if (popped.from.openingId === id) {
         if (tree) {
-          const src = findNodeById(tree, popped.from.nodeId);
+          const src = nodeMap.get(popped.from.nodeId) ?? null;
           if (src) {
             setForwardStack((prev) => [...prev, currentNode]);
             setCurrentNode(src);
@@ -362,7 +375,7 @@ export default function OpeningDetail() {
     if (!parentMap.has(currentNode.id)) return;
     setForwardStack((prev) => [...prev, currentNode]);
     setCurrentNode(parentMap.get(currentNode.id)!);
-  }, [currentNode, parentMap, id, tree, navHistory, navigate]);
+  }, [currentNode, parentMap, id, tree, navHistory, navigate, nodeMap]);
 
   // ── Delete ───────────────────────────────────────────────────────────────
 
@@ -719,11 +732,24 @@ export default function OpeningDetail() {
     return computeLearnableMap(tree, openingColor);
   }, [tree, openingColor]);
 
-  const totalLearnable = (() => {
+  const totalLearnable = useMemo(() => {
     let n = 0;
     for (const [, learnable] of learnableMap) if (learnable) n++;
     return n;
-  })();
+  }, [learnableMap]);
+
+  const learnedLearnableCount = useMemo(() => {
+    let n = 0;
+    for (const nid of learnedNodeIds) if (learnableMap.get(nid)) n++;
+    return n;
+  }, [learnedNodeIds, learnableMap]);
+
+  // Stable Context value — passing an inline object literal would re-render
+  // every MoveButton consumer on every parent render, regardless of memo.
+  const learnedCtxValue = useMemo(
+    () => ({ learned: learnedNodeIds, userColor: opening?.color ?? null, learnableMap }),
+    [learnedNodeIds, opening?.color, learnableMap],
+  );
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -752,13 +778,6 @@ export default function OpeningDetail() {
 
   const boardFen = pendingFen ?? currentNode?.fen ?? tree.fen;
   const boardOrientation = opening.color === 'white' ? 'white' : 'black';
-  // Count user-move nodes that are LEARNABLE (unique-response). Branching
-  // positions aren't reviewable so they don't gate the Learn button.
-  const learnedLearnableCount = (() => {
-    let n = 0;
-    for (const nid of learnedNodeIds) if (learnableMap.get(nid)) n++;
-    return n;
-  })();
   const hasUnlearned = learnedLearnableCount < totalLearnable;
   const hasLearned = learnedNodeIds.size > 0;
   const hasLinkTarget = !!(currentNode?.transposes_to_node_id && transTargets.get(currentNode.transposes_to_node_id));
@@ -950,7 +969,7 @@ export default function OpeningDetail() {
           ) : (
             <div ref={moveListRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 pb-14 min-h-0">
               <LinkTargetsContext.Provider value={transTargets}>
-                <LearnedContext.Provider value={{ learned: learnedNodeIds, userColor: opening.color, learnableMap }}>
+                <LearnedContext.Provider value={learnedCtxValue}>
                   <MoveTree
                     root={tree}
                     selected={currentNode}
@@ -1621,7 +1640,7 @@ function TranspositionsPanel({ links, targets, currentOpeningId, onGoTo, onEdit,
   );
 }
 
-function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
+const MoveButton = memo(function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
   node: Node;
   selected: boolean;
   onSelect: (n: Node) => void;
@@ -1692,4 +1711,4 @@ function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
       </button>
     </span>
   );
-}
+});

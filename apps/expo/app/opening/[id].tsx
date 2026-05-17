@@ -159,12 +159,45 @@ export default function OpeningDetailScreen() {
     return map;
   }, [tree]);
 
+  // Index of position_key → node ids that share it. Built once per tree so the
+  // per-navigation intra-duplicate check is O(1) instead of scanning all nodes.
+  const positionKeyIndex = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const n of nodeMap.values()) {
+      const list = m.get(n.position_key);
+      if (list) list.push(n.id);
+      else m.set(n.position_key, [n.id]);
+    }
+    return m;
+  }, [nodeMap]);
+
   const linkEntries = useMemo(() => (tree ? collectLinks(tree) : []), [tree]);
 
   const learnableMap = useMemo(
     () => (tree ? computeLearnableMap(tree, opening.color) : new Map<string, boolean>()),
     [tree, opening.color],
   );
+
+  // Stable Set of learnable node ids — passing the inline `new Set(...)`
+  // would re-fire MoveList's memo and trigger an O(N) promptSet rebuild
+  // on every navigation.
+  const learnableSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const [k, v] of learnableMap) if (v) s.add(k);
+    return s;
+  }, [learnableMap]);
+
+  const totalLearnable = useMemo(() => {
+    let n = 0;
+    for (const [, l] of learnableMap) if (l) n++;
+    return n;
+  }, [learnableMap]);
+
+  const learnedLearnableCount = useMemo(() => {
+    let n = 0;
+    for (const id of learnedNodeIds) if (learnableMap.get(id)) n++;
+    return n;
+  }, [learnableMap, learnedNodeIds]);
 
   // Whether the current node has a transposition available (intra or cross)
   // — drives visibility of the Transpose re-prompt button.
@@ -177,27 +210,26 @@ export default function OpeningDetailScreen() {
       setCurrentHasTrans(true);
       return;
     }
-    // Intra check is in-memory: another node in this opening with same position_key.
-    const key = currentNode.position_key;
-    let intraDup = false;
-    for (const n of nodeMap.values()) {
-      if (n.id !== currentNode.id && n.position_key === key) { intraDup = true; break; }
-    }
+    // Intra check is O(1) via positionKeyIndex.
+    const dupIds = positionKeyIndex.get(currentNode.position_key);
+    const intraDup = !!dupIds && dupIds.some((nid) => nid !== currentNode.id);
     if (intraDup) {
       setCurrentHasTrans(true);
       return;
     }
-    // Cross check needs a DB hit.
-    let cancelled = false;
+    // Cross check needs a DB hit. Debounce so rapid arrow-button navigation
+    // doesn't pile up concurrent Supabase queries — only the current node
+    // after the user stops navigating actually gets queried.
     setCurrentHasTrans(false);
-    (async () => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
       const parent = parentMap.get(currentNode.id);
       if (!parent) return;
       const cross = await findTransposition(currentNode.fen, parent.fen, id);
       if (!cancelled && cross) setCurrentHasTrans(true);
-    })();
-    return () => { cancelled = true; };
-  }, [currentNode, id, nodeMap, parentMap, tree]);
+    }, 200);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [currentNode, id, positionKeyIndex, parentMap, tree]);
 
   // Refresh targets whenever the set of links changes.
   const linkTargetIdsKey = useMemo(
@@ -664,10 +696,6 @@ export default function OpeningDetailScreen() {
   // Learn/Practice availability. "Learnable" = unique-response user-move;
   // branching positions don't count as needing to be learned.
   const openingColor = opening.color;
-  let totalLearnable = 0;
-  for (const [, l] of learnableMap) if (l) totalLearnable++;
-  let learnedLearnableCount = 0;
-  for (const nid of learnedNodeIds) if (learnableMap.get(nid)) learnedLearnableCount++;
   const hasUnlearned = learnedLearnableCount < totalLearnable;
   const hasLearned = learnedNodeIds.size > 0;
 
@@ -809,7 +837,7 @@ export default function OpeningDetailScreen() {
               selectedId={selectedId}
               linkKinds={linkKinds}
               learnedSet={learnedNodeIds}
-              learnableSet={new Set(Array.from(learnableMap.entries()).filter(([, v]) => v).map(([k]) => k))}
+              learnableSet={learnableSet}
               userColor={openingColor}
               onSelect={selectNode}
               onLongPress={(nodeId) => {

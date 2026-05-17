@@ -31,6 +31,9 @@ import { useColorTheme } from '@/hooks/useColorTheme';
 import type { Node, Opening } from '@/types';
 
 const OPPONENT_DELAY_MS = 300;
+// Stable empty-arrows reference: passing `[]` inline would defeat
+// Chessboard's memo on every parent re-render.
+const EMPTY_ARROWS: Array<{ from: string; to: string; color?: string }> = [];
 
 /**
  * Learn mode: walk forward through every move that would otherwise auto-play
@@ -401,7 +404,7 @@ export default function PracticeScreen() {
             disabled={session.status !== 'awaiting-user'}
             squareStyles={hintSquares}
             size={boardSize}
-            arrows={ mode == 'learn' ? [] : doneArrows}
+            arrows={mode === 'learn' ? EMPTY_ARROWS : doneArrows}
           />
         </View>
       </View>
