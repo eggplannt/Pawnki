@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import Icon from '@mdi/react';
+import { mdiChessKing } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
-import { listOpenings, deleteOpening } from '@/lib/openings';
+import { listOpenings, deleteOpening, getLearnableCountsByOpening } from '@/lib/openings';
 import { getLearnedCountsByOpening } from '@/lib/review-cards';
 import type { Opening } from '@/types';
 
 type Tab = 'white' | 'black';
-type OpeningWithStats = Opening & { nodeCount: number; dueCount: number; learnedCount: number };
+type OpeningWithStats = Opening & {
+  nodeCount: number;
+  learnedCount: number;
+  learnableCount: number;
+};
 
 export default function Library() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -28,11 +34,18 @@ export default function Library() {
   async function loadOpenings() {
     setLoading(true);
     try {
-      const [data, learnedCounts] = await Promise.all([
+      const [data, learnedCounts, learnableCounts] = await Promise.all([
         listOpenings(),
         getLearnedCountsByOpening().catch(() => new Map<string, number>()),
+        getLearnableCountsByOpening().catch(() => new Map<string, number>()),
       ]);
-      setOpenings(data.map((o) => ({ ...o, learnedCount: learnedCounts.get(o.id) ?? 0 })));
+      setOpenings(
+        data.map((o) => ({
+          ...o,
+          learnedCount: learnedCounts.get(o.id) ?? 0,
+          learnableCount: learnableCounts.get(o.id) ?? 0,
+        })),
+      );
     } finally {
       setLoading(false);
     }
@@ -70,7 +83,10 @@ export default function Library() {
                   : 'text-content-muted hover:text-content-secondary',
               ].join(' ')}
             >
-              {t === 'white' ? '♔ White' : '♚ Black'}
+              <span className="inline-flex items-center gap-1.5">
+                <Icon path={mdiChessKing} size={0.7} color={`rgb(var(--color-${t === 'white' ? 'gold' : 'accent'}))`} />
+                {t === 'white' ? 'White' : 'Black'}
+              </span>
             </button>
           ))}
         </div>
@@ -82,9 +98,9 @@ export default function Library() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-20">
-            <span className="text-5xl mb-4 block opacity-30">
-              {tab === 'white' ? '♔' : '♚'}
-            </span>
+            <div className="mb-4 flex justify-center opacity-30">
+              <Icon path={mdiChessKing} size={2.5} color={`rgb(var(--color-${tab === 'white' ? 'gold' : 'accent'}))`} />
+            </div>
             <p className="text-content-muted text-lg mb-2">No {tab} openings yet</p>
             <p className="text-content-muted text-sm">
               Create one to start building your repertoire.
@@ -139,16 +155,14 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
   }
 
   return (
-    <div className="relative bg-bg-surface border border-border rounded-xl hover:border-accent/40 transition-all group hover:shadow-md hover:shadow-black/10">
+    <div className="relative bg-bg-surface border border-border rounded-xl overflow-hidden hover:border-accent/40 transition-all group hover:shadow-md hover:shadow-black/10">
       {/* Color stripe at top */}
       <div className={`h-1 rounded-t-xl ${isWhite ? 'bg-gold' : 'bg-accent'}`} />
 
       <Link to={`/library/${opening.id}`} className="block p-4">
         <div className="flex items-start justify-between mb-3 pr-6">
           <div className="flex items-center gap-2">
-            <span className={`text-lg ${isWhite ? 'text-gold' : 'text-accent'}`}>
-              {isWhite ? '♔' : '♚'}
-            </span>
+            <Icon path={mdiChessKing} size={0.85} color={`rgb(var(--color-${isWhite ? 'gold' : 'accent'}))`} />
             <h3 className="text-content-primary font-medium group-hover:text-accent transition-colors">
               {opening.name}
             </h3>
@@ -156,20 +170,15 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-content-muted text-xs bg-bg-elevated px-2 py-1 rounded-md">
-            {Math.max(0, opening.nodeCount - 1)} moves
+            {opening.learnedCount} Position{opening.learnedCount !== 1 ? "s" : ""} in review
           </span>
-          {opening.learnedCount > 0 ? (
-            <span className="bg-accent/15 text-accent text-xs font-medium px-2 py-1 rounded-md">
-              {opening.learnedCount} learned
-            </span>
-          ) : (
+          {opening.learnableCount === 0 ? (
             <span className="bg-bg-elevated text-content-muted text-xs px-2 py-1 rounded-md italic">
-              Not learned
+              Nothing reviewable
             </span>
-          )}
-          {opening.dueCount > 0 && (
-            <span className="bg-gold/15 text-gold text-xs font-medium px-2 py-1 rounded-md">
-              {opening.dueCount} due
+          ) : opening.learnedCount >= opening.learnableCount ? null : (
+            <span className="bg-accent/15 text-accent text-xs font-medium px-2 py-1 rounded-md">
+              {opening.learnableCount - opening.learnedCount} Position{opening.learnableCount - opening.learnedCount !== 1 ? "s" : ""} to learn
             </span>
           )}
         </div>
@@ -317,7 +326,10 @@ function CreateOpeningModal({
                           : 'border-border text-content-muted hover:text-content-secondary',
                       ].join(' ')}
                     >
-                      {c === 'white' ? '♔ White' : '♚ Black'}
+                      <span className="inline-flex items-center justify-center gap-1.5">
+                        <Icon path={mdiChessKing} size={0.7} color={`rgb(var(--color-${c === 'white' ? 'gold' : 'accent'}))`} />
+                        {c === 'white' ? 'White' : 'Black'}
+                      </span>
                     </button>
                   ))}
                 </div>

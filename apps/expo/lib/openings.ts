@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { parsePgn, positionKey, type PgnNode } from './pgn-tree';
+import { computeLearnableMap } from './practice';
 
 export { positionKey } from './pgn-tree';
 import type { Opening, Node } from '@/types';
@@ -93,6 +94,33 @@ export async function deleteOpening(id: string) {
 }
 
 // ── Nodes ───────────────────────────────────────────────────────────────────
+
+export async function getLearnableCountsByOpening(): Promise<Map<string, number>> {
+  const [openingsRes, nodesRes] = await Promise.all([
+    supabase.from('openings').select('id, color'),
+    supabase.from('nodes').select('*').order('sort_order', { ascending: true }),
+  ]);
+  if (openingsRes.error) throw openingsRes.error;
+  if (nodesRes.error) throw nodesRes.error;
+
+  const byOpening = new Map<string, Node[]>();
+  for (const n of (nodesRes.data ?? []) as Node[]) {
+    const arr = byOpening.get(n.opening_id);
+    if (arr) arr.push(n);
+    else byOpening.set(n.opening_id, [n]);
+  }
+
+  const out = new Map<string, number>();
+  for (const op of openingsRes.data ?? []) {
+    const tree = buildTree(byOpening.get(op.id) ?? []);
+    if (!tree) { out.set(op.id, 0); continue; }
+    const lm = computeLearnableMap(tree, op.color as 'white' | 'black');
+    let total = 0;
+    for (const [, v] of lm) if (v) total++;
+    out.set(op.id, total);
+  }
+  return out;
+}
 
 export async function getNodes(openingId: string): Promise<Node[]> {
   const { data, error } = await supabase

@@ -14,15 +14,20 @@ import {
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppShell } from '@/components/AppShell';
-import { listOpenings, createOpening, deleteOpening, type ImportProgress } from '@/lib/openings';
+import { listOpenings, createOpening, deleteOpening, getLearnableCountsByOpening, type ImportProgress } from '@/lib/openings';
 import { getLearnedCountsByOpening } from '@/lib/review-cards';
-import { colorTheme } from '@/hooks/useColorTheme';
+import { useColorTheme } from '@/hooks/useColorTheme';
 import type { Opening } from '@/types';
 
 type Tab = 'white' | 'black';
-type OpeningWithStats = Opening & { nodeCount: number; dueCount: number; learnedCount: number };
+type OpeningWithStats = Opening & {
+  nodeCount: number;
+  learnedCount: number;
+  learnableCount: number;
+};
 
 export default function LibraryScreen() {
+  const { colors: colorTheme } = useColorTheme();
   const [tab, setTab] = useState<Tab>('white');
   const [openings, setOpenings] = useState<OpeningWithStats[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,11 +37,18 @@ export default function LibraryScreen() {
   const loadOpenings = useCallback(async () => {
     setLoading(true);
     try {
-      const [data, learnedCounts] = await Promise.all([
+      const [data, learnedCounts, learnableCounts] = await Promise.all([
         listOpenings(),
         getLearnedCountsByOpening().catch(() => new Map<string, number>()),
+        getLearnableCountsByOpening().catch(() => new Map<string, number>()),
       ]);
-      setOpenings(data.map((o) => ({ ...o, learnedCount: learnedCounts.get(o.id) ?? 0 })));
+      setOpenings(
+        data.map((o) => ({
+          ...o,
+          learnedCount: learnedCounts.get(o.id) ?? 0,
+          learnableCount: learnableCounts.get(o.id) ?? 0,
+        })),
+      );
     } finally {
       setLoading(false);
     }
@@ -122,7 +134,7 @@ export default function LibraryScreen() {
                 <OpeningCard
                   key={opening.id}
                   opening={opening}
-                  onPress={() => router.push({ pathname: `/opening/${opening.id}`, params: { name: opening.name, color: opening.color } })}
+                  onPress={() => router.push({ pathname: '/opening/[id]', params: { id: opening.id, name: opening.name, color: opening.color } })}
                   onDelete={async () => {
                     await deleteOpening(opening.id);
                     loadOpenings();
@@ -157,6 +169,7 @@ function OpeningCard({
   onPress: () => void;
   onDelete: () => void;
 }) {
+  const { colors: colorTheme } = useColorTheme();
   const isWhite = opening.color === 'white';
 
   function handleLongPress() {
@@ -190,20 +203,15 @@ function OpeningCard({
         </View>
         <View className="flex-row items-center gap-2 flex-wrap">
           <View className="bg-bg-elevated px-2 py-1 rounded-md">
-            <Text className="text-content-muted text-xs">{opening.nodeCount} moves</Text>
+            <Text className="text-content-muted text-xs">{opening.learnedCount} Positions in review</Text>
           </View>
-          {opening.learnedCount > 0 ? (
-            <View className="bg-accent/15 px-2 py-1 rounded-md">
-              <Text className="text-accent text-xs font-medium">{opening.learnedCount} learned</Text>
-            </View>
-          ) : (
+          {opening.learnableCount === 0 ? (
             <View className="bg-bg-elevated px-2 py-1 rounded-md">
-              <Text className="text-content-muted text-xs italic">Not learned</Text>
+              <Text className="text-content-muted text-xs italic">Nothing reviewable</Text>
             </View>
-          )}
-          {opening.dueCount > 0 && (
-            <View className="bg-gold/15 px-2 py-1 rounded-md">
-              <Text className="text-gold text-xs font-medium">{opening.dueCount} due</Text>
+          ) : opening.learnedCount >= opening.learnableCount ? null : (
+            <View className="bg-accent/15 px-2 py-1 rounded-md">
+              <Text className="text-accent text-xs font-medium">{opening.learnableCount - opening.learnedCount} to learn</Text>
             </View>
           )}
         </View>
@@ -223,6 +231,7 @@ function CreateOpeningModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const { colors: colorTheme } = useColorTheme();
   const [name, setName] = useState('');
   const [color, setColor] = useState<'white' | 'black'>(defaultColor);
   const [pgn, setPgn] = useState('');

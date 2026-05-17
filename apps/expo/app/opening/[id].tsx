@@ -29,11 +29,11 @@ import {
   type IntraTranspositionMatch,
 } from '@/lib/openings';
 import { getLearnedNodeIds } from '@/lib/review-cards';
-import { computeApplicableCounts } from '@/lib/practice';
+import { computeApplicableCounts, computeLearnableMap } from '@/lib/practice';
 import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chessboard, type ChessboardMove } from '@/components/Chessboard';
 import { MoveList } from '@/components/MoveList';
-import { colorTheme } from '@/hooks/useColorTheme';
+import { useColorTheme } from '@/hooks/useColorTheme';
 import type { Opening, Node } from '@/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -99,6 +99,7 @@ type TransChoice = {
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export default function OpeningDetailScreen() {
+  const { colors: colorTheme } = useColorTheme();
   const params = useLocalSearchParams<{ id: string; name?: string; color?: string; node?: string; from?: string }>();
   const id = params.id;
   const router = useRouter();
@@ -159,6 +160,11 @@ export default function OpeningDetailScreen() {
   }, [tree]);
 
   const linkEntries = useMemo(() => (tree ? collectLinks(tree) : []), [tree]);
+
+  const learnableMap = useMemo(
+    () => (tree ? computeLearnableMap(tree, opening.color) : new Map<string, boolean>()),
+    [tree, opening.color],
+  );
 
   // Whether the current node has a transposition available (intra or cross)
   // — drives visibility of the Transpose re-prompt button.
@@ -253,6 +259,24 @@ export default function OpeningDetailScreen() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // React to ?node= changes that arrive after initial mount (e.g. navigating
+  // back to this opening from the practice screen to inspect a mistake).
+  const nodeParam = params.node;
+  const initialNodeRef = useRef<string | null>(nodeParam ?? null);
+  useEffect(() => {
+    if (!nodeParam || !tree) return;
+    if (initialNodeRef.current === nodeParam) {
+      initialNodeRef.current = null;
+      return;
+    }
+    const target = findNodeById(tree, nodeParam);
+    if (target) {
+      setCurrentNode(target);
+      setForwardStack([]);
+      setPendingFen(null);
+    }
+  }, [nodeParam, tree]);
 
   // Record nav history when arriving via cross-opening jump
   const fromParam = params.from;
@@ -637,21 +661,14 @@ export default function OpeningDetailScreen() {
     || !!(currentNode && id && navPeek && navPeek.to.openingId === id && navPeek.to.nodeId === currentNode.id);
   const isRoot = currentNode === tree;
 
-  // Learn/Practice availability.
+  // Learn/Practice availability. "Learnable" = unique-response user-move;
+  // branching positions don't count as needing to be learned.
   const openingColor = opening.color;
-  const totalUserMoves = (() => {
-    let n = 0;
-    function walk(node: Node) {
-      if (node.move_san !== null) {
-        const side = node.fen.split(' ')[1] === 'w' ? 'white' : 'black';
-        if (side !== openingColor) n++;
-      }
-      for (const c of node.children ?? []) walk(c);
-    }
-    walk(tree);
-    return n;
-  })();
-  const hasUnlearned = learnedNodeIds.size < totalUserMoves;
+  let totalLearnable = 0;
+  for (const [, l] of learnableMap) if (l) totalLearnable++;
+  let learnedLearnableCount = 0;
+  for (const nid of learnedNodeIds) if (learnableMap.get(nid)) learnedLearnableCount++;
+  const hasUnlearned = learnedLearnableCount < totalLearnable;
   const hasLearned = learnedNodeIds.size > 0;
 
   return (
@@ -676,8 +693,9 @@ export default function OpeningDetailScreen() {
         <Pressable
           onPress={() => hasUnlearned && setStartMode('learn')}
           disabled={!hasUnlearned}
-          className={`px-2 py-1 rounded-md ${hasUnlearned ? 'bg-accent/15 active:bg-accent/25' : 'bg-bg-elevated'}`}
+          className={`px-2 py-1 rounded-md flex-row items-center gap-1 ${hasUnlearned ? 'bg-accent/15 active:bg-accent/25' : 'bg-bg-elevated'}`}
         >
+          {hasUnlearned && <Text className="text-gold text-xs">▸</Text>}
           <Text className={`text-xs font-medium ${hasUnlearned ? 'text-accent' : 'text-content-muted'}`}>Learn</Text>
         </Pressable>
         <Pressable
@@ -691,7 +709,7 @@ export default function OpeningDetailScreen() {
           onPress={() => { setPgnText(''); setImportError(null); setImportProgress(null); setPgnOpen(true); }}
           className="px-2 py-1 rounded-md active:bg-bg-elevated"
         >
-          <Text className="text-accent text-xs">PGN</Text>
+          <Text className="text-accent text-xs">Import/Merge PGN</Text>
         </Pressable>
       </View>
 
@@ -703,6 +721,7 @@ export default function OpeningDetailScreen() {
             orientation={opening.color}
             onMove={handleMove}
             disabled={saving}
+            size={boardSize}
           />
         </View>
       </View>
@@ -790,6 +809,7 @@ export default function OpeningDetailScreen() {
               selectedId={selectedId}
               linkKinds={linkKinds}
               learnedSet={learnedNodeIds}
+              learnableSet={new Set(Array.from(learnableMap.entries()).filter(([, v]) => v).map(([k]) => k))}
               userColor={openingColor}
               onSelect={selectNode}
               onLongPress={(nodeId) => {
@@ -1245,6 +1265,7 @@ const NavButton = memo(function NavButton({
   disabled: boolean;
   icon: 'skip-previous' | 'chevron-left' | 'chevron-right' | 'skip-next';
 }) {
+  const { colors: colorTheme } = useColorTheme();
   return (
     <Pressable
       onPress={onPress}
@@ -1296,6 +1317,7 @@ function LinksPanel({
   onAbsorb: (n: Node, t: TargetInfo) => void;
   disabled: boolean;
 }) {
+  const { colors: colorTheme } = useColorTheme();
   if (linkEntries.length === 0) {
     return (
       <View className="flex-1 items-center justify-center p-6">

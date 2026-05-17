@@ -1,3 +1,10 @@
+/**
+ * Colors reference CSS variables set at runtime by useColorTheme.
+ * Each var holds "r g b" channels so utilities like `bg-accent/15`
+ * can compose alpha via the <alpha-value> placeholder.
+ */
+const withVar = (name) => `rgb(var(--color-${name}) / <alpha-value>)`;
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
@@ -16,33 +23,33 @@ export default {
       },
       colors: {
         bg: {
-          base:     'var(--color-bg-base)',
-          surface:  'var(--color-bg-surface)',
-          elevated: 'var(--color-bg-elevated)',
+          base:     withVar('bg-base'),
+          surface:  withVar('bg-surface'),
+          elevated: withVar('bg-elevated'),
         },
         content: {
-          primary:   'var(--color-content-primary)',
-          secondary: 'var(--color-content-secondary)',
-          muted:     'var(--color-content-muted)',
+          primary:   withVar('content-primary'),
+          secondary: withVar('content-secondary'),
+          muted:     withVar('content-muted'),
         },
         accent: {
-          DEFAULT: 'var(--color-accent)',
-          hover:   'var(--color-accent-hover)',
-          dim:     'var(--color-accent-dim)',
+          DEFAULT: withVar('accent'),
+          hover:   withVar('accent-hover'),
+          dim:     withVar('accent-dim'),
         },
         gold: {
-          DEFAULT: 'var(--color-gold)',
-          dim:     'var(--color-gold-dim)',
+          DEFAULT: withVar('gold'),
+          dim:     withVar('gold-dim'),
         },
         border: {
-          DEFAULT: 'var(--color-border)',
-          subtle:  'var(--color-border-subtle)',
+          DEFAULT: withVar('border'),
+          subtle:  withVar('border-subtle'),
         },
-        danger:  'var(--color-danger)',
-        success: 'var(--color-success)',
+        danger:  withVar('danger'),
+        success: withVar('success'),
         board: {
-          dark:  'var(--color-board-dark)',
-          light: 'var(--color-board-light)',
+          dark:  withVar('board-dark'),
+          light: withVar('board-light'),
         },
       },
     },

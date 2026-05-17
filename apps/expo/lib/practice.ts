@@ -20,6 +20,31 @@ export function isUserDecision(node: Node, userColor: 'white' | 'black'): boolea
   return fenSide(node.fen) === userColor && (node.children?.length ?? 0) > 0;
 }
 
+/**
+ * Walk the tree and mark each user-move node as learnable iff its parent's
+ * decision has exactly one user-move child (= unique response).
+ * Branching positions (parent with multiple user-move children) aren't
+ * learnable: there's no single "correct" answer to memorize. They remain
+ * practicable but never get review_cards rows.
+ */
+export function computeLearnableMap(
+  root: Node,
+  userColor: 'white' | 'black',
+): Map<string, boolean> {
+  const out = new Map<string, boolean>();
+  function walk(n: Node) {
+    const userKids = (n.children ?? []).filter((c) => isUserMove(c, userColor));
+    const unique = userKids.length === 1;
+    for (const c of n.children ?? []) {
+      out.set(c.id, isUserMove(c, userColor) ? unique : false);
+      walk(c);
+    }
+  }
+  out.set(root.id, false);
+  walk(root);
+  return out;
+}
+
 // ── Session types ───────────────────────────────────────────────────────────
 
 export type PracticeMode = 'learn' | 'practice';
@@ -47,10 +72,20 @@ export interface PracticeSession {
   currentNode: Node;
   /** Subtree-root ids whose DFS has been completed this session — skipped on backtrack. */
   practicedChildIds: Set<string>;
-  /** User-move node ids reached this session whose subtree we descended into. */
-  visitedUserMoves: Set<string>;
+  /** Learn mode: user-move ids the user picked correctly with ZERO wrong attempts
+   *  at the parent. These (and only these) become review_cards at finalize.
+   *  Practice mode: every applicable user-move correctly visited. */
+  firstTryCorrect: Set<string>;
+  /** Learn mode only: decisions to re-prompt after main DFS completes because
+   *  the user had at least one wrong attempt at them. Processed FIFO. */
+  requeueEntries: Array<{ parentId: string; childId: string }>;
+  /** 'main' = DFS through the tree; 'requeue' = re-prompting tainted decisions. */
+  phase: 'main' | 'requeue';
   /** Per-mode applicable counts per node id (precomputed at start). */
   applicableCounts: Map<string, number>;
+  /** Node id → whether that user-move is the unique response at its parent
+   *  (and therefore reviewable). Branching positions are not learnable. */
+  learnableMap: Map<string, boolean>;
   /** Set of node ids reachable from root (subtree scope) for fast membership tests. */
   inScopeIds: Set<string>;
   mistakes: PracticeMistake[];
@@ -82,20 +117,25 @@ export interface AttemptResult {
 /**
  * Compute applicableCounts for every node in `root`'s subtree.
  *
- * - Learn mode: count every unlearned user-move descendant (including self).
- * - Practice mode: count learned user-move nodes reachable via paths of
- *   exclusively learned user moves. Once we cross an unlearned user move we
- *   stop counting beyond it.
+ * - Learn mode: count unlearned LEARNABLE (unique-response) user-move
+ *   descendants. Branching user-moves aren't counted (not reviewable) but
+ *   DFS still walks through them to reach learnables deeper in the tree.
+ * - Practice mode: count practicable user-moves. A user-move is practicable
+ *   iff it's a learned learnable OR a branching (non-learnable) move. When
+ *   we hit an unlearned learnable we stop — can't practice past unknown.
  */
 export function computeApplicableCounts(
   root: Node,
   userColor: 'white' | 'black',
   learnedIds: Set<string>,
   mode: PracticeMode,
+  learnableMap?: Map<string, boolean>,
 ): Map<string, number> {
+  const lm = learnableMap ?? computeLearnableMap(root, userColor);
   const out = new Map<string, number>();
   function walkLearn(n: Node): number {
-    const selfHit = isUserMove(n, userColor) && !learnedIds.has(n.id) ? 1 : 0;
+    const learnable = lm.get(n.id) ?? false;
+    const selfHit = isUserMove(n, userColor) && learnable && !learnedIds.has(n.id) ? 1 : 0;
     let total = selfHit;
     for (const c of n.children ?? []) total += walkLearn(c);
     out.set(n.id, total);
@@ -103,11 +143,13 @@ export function computeApplicableCounts(
   }
   function walkPractice(n: Node): number {
     if (isUserMove(n, userColor)) {
-      if (!learnedIds.has(n.id)) {
-        // Stop here — Practice never traverses beyond an unlearned user move.
+      const learnable = lm.get(n.id) ?? false;
+      if (learnable && !learnedIds.has(n.id)) {
+        // Stop — can't practice past an unlearned unique-response.
         out.set(n.id, 0);
         return 0;
       }
+      // Practicable: learnable+learned OR branching (always practicable).
       let total = 1;
       for (const c of n.children ?? []) total += walkPractice(c);
       out.set(n.id, total);
@@ -132,11 +174,13 @@ function collectIds(root: Node, out: Set<string>) {
 // ── Session lifecycle ───────────────────────────────────────────────────────
 
 export function startSession(opts: PracticeOptions): PracticeSession {
+  const learnableMap = computeLearnableMap(opts.rootNode, opts.userColor);
   const applicableCounts = computeApplicableCounts(
     opts.rootNode,
     opts.userColor,
     opts.learnedNodeIds,
     opts.mode,
+    learnableMap,
   );
   const inScopeIds = new Set<string>();
   collectIds(opts.rootNode, inScopeIds);
@@ -146,8 +190,11 @@ export function startSession(opts: PracticeOptions): PracticeSession {
     options: opts,
     currentNode: opts.rootNode,
     practicedChildIds: new Set(),
-    visitedUserMoves: new Set(),
+    firstTryCorrect: new Set(),
+    requeueEntries: [],
+    phase: 'main',
     applicableCounts,
+    learnableMap,
     inScopeIds,
     mistakes: [],
     hintsUsed: new Set(),
@@ -174,19 +221,24 @@ function nextStatus(
  * filtering and excluding already-practiced subtrees this session.
  */
 export function applicableChildren(session: PracticeSession): Node[] {
-  const { currentNode, options, applicableCounts, practicedChildIds } = session;
+  const { currentNode, options, applicableCounts, practicedChildIds, learnableMap } = session;
   const children = currentNode.children ?? [];
   const userIsToMove = fenSide(currentNode.fen) === options.userColor;
   return children.filter((c) => {
     if (practicedChildIds.has(c.id)) return false;
     if (userIsToMove) {
-      // At a user decision, mode filter applies to the chosen child.
       if (options.mode === 'learn') {
-        // Allowed if its subtree still has unlearned descendants.
+        // Allow walking through any child whose subtree still has unlearned
+        // learnables — even branching choices, so we can reach learnables below.
         return (applicableCounts.get(c.id) ?? 0) > 0;
       } else {
-        // Practice: the chosen move itself must be learned.
-        return options.learnedNodeIds.has(c.id);
+        const learnable = learnableMap.get(c.id) ?? false;
+        if (learnable) {
+          // Unique-response: child must be the learned answer.
+          return options.learnedNodeIds.has(c.id);
+        }
+        // Branching: any branch is a valid practice choice.
+        return (applicableCounts.get(c.id) ?? 0) > 0;
       }
     } else {
       // Opponent move — engine plays it; prune if subtree has no applicable nodes.
@@ -200,7 +252,7 @@ export function disallowedChildren(session: PracticeSession): Array<{
   child: Node;
   reason: 'already-practiced' | 'already-learned' | 'not-learned';
 }> {
-  const { currentNode, options, practicedChildIds, applicableCounts } = session;
+  const { currentNode, options, practicedChildIds, applicableCounts, learnableMap } = session;
   const userIsToMove = fenSide(currentNode.fen) === options.userColor;
   const out: Array<{ child: Node; reason: 'already-practiced' | 'already-learned' | 'not-learned' }> = [];
   for (const c of currentNode.children ?? []) {
@@ -209,7 +261,10 @@ export function disallowedChildren(session: PracticeSession): Array<{
     if (options.mode === 'learn') {
       if ((applicableCounts.get(c.id) ?? 0) === 0) out.push({ child: c, reason: 'already-learned' });
     } else {
-      if (!options.learnedNodeIds.has(c.id)) out.push({ child: c, reason: 'not-learned' });
+      const learnable = learnableMap.get(c.id) ?? false;
+      if (learnable && !options.learnedNodeIds.has(c.id)) {
+        out.push({ child: c, reason: 'not-learned' });
+      }
     }
   }
   return out;
@@ -237,7 +292,7 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
     return { session: next, verdict: 'wrong', reason: 'Not a move in this opening.' };
   }
   // Move exists, but check mode/scope filters.
-  if (session.practicedChildIds.has(match.id)) {
+  if (session.phase === 'main' && session.practicedChildIds.has(match.id)) {
     return {
       session,
       verdict: 'wrong-disallowed',
@@ -255,7 +310,8 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
         };
       }
     } else {
-      if (!session.options.learnedNodeIds.has(match.id)) {
+      const learnable = session.learnableMap.get(match.id) ?? false;
+      if (learnable && !session.options.learnedNodeIds.has(match.id)) {
         return {
           session,
           verdict: 'wrong-mode',
@@ -264,25 +320,90 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
       }
     }
   }
-  // Correct! Advance.
-  const visited = new Set(session.visitedUserMoves);
-  let completed = session.completedApplicable;
-  if (isUserMove(match, session.options.userColor)) {
-    // Count this as completed only if it matched the mode filter (was applicable
-    // at session start). For learn: unlearned. For practice: learned.
-    const wasApplicableSelf =
-      session.options.mode === 'learn'
-        ? !session.options.learnedNodeIds.has(match.id)
-        : session.options.learnedNodeIds.has(match.id);
-    if (wasApplicableSelf && !visited.has(match.id)) {
-      visited.add(match.id);
+
+  // Correct.
+  const wasFirstTry = session.wrongAttemptsHere === 0;
+  const matchLearnable = session.learnableMap.get(match.id) ?? false;
+  // A user-move "counts" toward progress when it matches what `totalApplicable`
+  // counted. Learn mode: only learnable + unlearned moves. Practice mode:
+  // every practicable user-move — i.e. branching moves AND learned learnables.
+  const moveIsUserMove = isUserMove(match, session.options.userColor);
+  const wasApplicableSelf = moveIsUserMove && (session.options.mode === 'learn'
+    ? matchLearnable && !session.options.learnedNodeIds.has(match.id)
+    : !matchLearnable || session.options.learnedNodeIds.has(match.id));
+
+  // ── Requeue phase: don't descend, just dequeue and move on ────────────
+  if (session.phase === 'requeue') {
+    const queue = session.requeueEntries.slice(1); // drop the entry we just answered
+    let firstTry = session.firstTryCorrect;
+    let completed = session.completedApplicable;
+    if (wasFirstTry && wasApplicableSelf && !firstTry.has(match.id)) {
+      firstTry = new Set(firstTry);
+      firstTry.add(match.id);
       completed += 1;
+    } else if (!wasFirstTry && wasApplicableSelf) {
+      // Tainted again — re-queue at end so they get another shot.
+      queue.push({ parentId: session.currentNode.id, childId: match.id });
+    }
+    if (queue.length === 0) {
+      return {
+        session: {
+          ...session,
+          requeueEntries: queue,
+          firstTryCorrect: firstTry,
+          completedApplicable: completed,
+          status: 'complete',
+        },
+        verdict: 'correct',
+        target: match,
+      };
+    }
+    const nextParent = findNodeById(session.options.rootNode, queue[0].parentId) ?? session.currentNode;
+    return {
+      session: {
+        ...session,
+        currentNode: nextParent,
+        requeueEntries: queue,
+        firstTryCorrect: firstTry,
+        completedApplicable: completed,
+        wrongAttemptsHere: 0,
+        hintLevel: 0,
+        status: 'awaiting-user',
+      },
+      verdict: 'correct',
+      target: match,
+    };
+  }
+
+  // ── Main phase: advance through the tree ──────────────────────────────
+  let firstTry = session.firstTryCorrect;
+  let completed = session.completedApplicable;
+  let queue = session.requeueEntries;
+  if (isUserMove(match, session.options.userColor) && wasApplicableSelf) {
+    if (wasFirstTry) {
+      if (!firstTry.has(match.id)) {
+        firstTry = new Set(firstTry);
+        firstTry.add(match.id);
+        completed += 1;
+      }
+    } else if (session.options.mode === 'learn') {
+      // Learn mode: tainted by a wrong attempt → queue for re-prompt at end.
+      queue = [...queue, { parentId: session.currentNode.id, childId: match.id }];
+    } else {
+      // Practice mode: count as completed even with prior wrong attempts
+      // (no re-queue concept in practice).
+      if (!firstTry.has(match.id)) {
+        firstTry = new Set(firstTry);
+        firstTry.add(match.id);
+        completed += 1;
+      }
     }
   }
   const advanced: PracticeSession = {
     ...session,
     currentNode: match,
-    visitedUserMoves: visited,
+    firstTryCorrect: firstTry,
+    requeueEntries: queue,
     completedApplicable: completed,
     hintLevel: 0,
     wrongAttemptsHere: 0,
@@ -327,9 +448,12 @@ function settleIfLeaf(session: PracticeSession): PracticeSession {
 }
 
 export function backtrack(session: PracticeSession): PracticeSession {
+  // Don't backtrack during requeue — that phase has no tree DFS.
+  if (session.phase === 'requeue') return session;
+
   const path = findPath(session.options.rootNode, session.currentNode.id);
   if (!path || path.length === 0) {
-    return { ...session, status: 'complete' };
+    return enterRequeueOrComplete(session);
   }
   const practiced = new Set(session.practicedChildIds);
   // Mark current as done, then walk up until an ancestor still has work.
@@ -349,10 +473,27 @@ export function backtrack(session: PracticeSession): PracticeSession {
     }
     practiced.add(ancestor.id);
   }
+  return enterRequeueOrComplete({ ...session, practicedChildIds: practiced });
+}
+
+/** Called once main DFS has nothing left. Enter requeue phase if there are
+ *  pending re-prompts; otherwise mark complete. */
+function enterRequeueOrComplete(session: PracticeSession): PracticeSession {
+  if (session.requeueEntries.length === 0) {
+    return { ...session, status: 'complete' };
+  }
+  const first = session.requeueEntries[0];
+  const parent = findNodeById(session.options.rootNode, first.parentId);
+  if (!parent) {
+    return { ...session, status: 'complete' };
+  }
   return {
     ...session,
-    practicedChildIds: practiced,
-    status: 'complete',
+    phase: 'requeue',
+    currentNode: parent,
+    hintLevel: 0,
+    wrongAttemptsHere: 0,
+    status: 'awaiting-user',
   };
 }
 
@@ -360,7 +501,9 @@ function isApplicableChild(session: PracticeSession, parent: Node, child: Node):
   const userIsToMove = fenSide(parent.fen) === session.options.userColor;
   if (userIsToMove) {
     if (session.options.mode === 'learn') return (session.applicableCounts.get(child.id) ?? 0) > 0;
-    return session.options.learnedNodeIds.has(child.id);
+    const learnable = session.learnableMap.get(child.id) ?? false;
+    if (learnable) return session.options.learnedNodeIds.has(child.id);
+    return (session.applicableCounts.get(child.id) ?? 0) > 0;
   }
   return (session.applicableCounts.get(child.id) ?? 0) > 0;
 }
@@ -370,6 +513,15 @@ function findPath(root: Node, targetId: string): Node[] | null {
   for (const c of root.children ?? []) {
     const sub = findPath(c, targetId);
     if (sub) return [root, ...sub];
+  }
+  return null;
+}
+
+function findNodeById(root: Node, id: string): Node | null {
+  if (root.id === id) return root;
+  for (const c of root.children ?? []) {
+    const f = findNodeById(c, id);
+    if (f) return f;
   }
   return null;
 }
@@ -419,6 +571,6 @@ export function finalize(session: PracticeSession): SessionSummary {
     completedApplicable: session.completedApplicable,
     mistakes: session.mistakes,
     hintedNodeIds: Array.from(session.hintsUsed),
-    visitedUserMoveIds: Array.from(session.visitedUserMoves),
+    visitedUserMoveIds: Array.from(session.firstTryCorrect),
   };
 }

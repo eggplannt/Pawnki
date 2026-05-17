@@ -5,6 +5,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { useEffect } from 'react';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { NavHistoryProvider } from '@/hooks/useNavHistory';
+import { ThemeProvider } from '@/hooks/useColorTheme';
 
 function AuthGate() {
   const { user, loading } = useAuth();
@@ -25,19 +26,21 @@ function AuthGate() {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <AuthProvider>
-        <NavHistoryProvider>
-          <AuthGate />
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="(auth)" />
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="auth/callback" />
-            <Stack.Screen name="opening/[id]" />
-            <Stack.Screen name="practice/[id]" />
-          </Stack>
-        </NavHistoryProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <NavHistoryProvider>
+            <AuthGate />
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="index" />
+              <Stack.Screen name="(auth)" />
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="auth/callback" />
+              <Stack.Screen name="opening/[id]" />
+              <Stack.Screen name="practice/[id]" />
+            </Stack>
+          </NavHistoryProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </GestureHandlerRootView>
   );
 }

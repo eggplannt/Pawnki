@@ -2,9 +2,10 @@ import { View, Text, Pressable, ActivityIndicator } from 'react-native';
 import { useState } from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '@/hooks/useAuth';
-import { colorTheme } from '@/hooks/useColorTheme';
+import { useColorTheme } from '@/hooks/useColorTheme';
 
 export default function LoginScreen() {
+  const { colors: colorTheme } = useColorTheme();
   const { signInWithGoogle } = useAuth();
   const [loading, setLoading] = useState(false);
 

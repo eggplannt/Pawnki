@@ -15,8 +15,8 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: var(--color-bg-base, #020303);
-  color: var(--color-content-primary, #f0ebe3);
+  background-color: rgb(var(--color-bg-base, 2 3 3));
+  color: rgb(var(--color-content-primary, 240 235 227));
 }
 
 body {

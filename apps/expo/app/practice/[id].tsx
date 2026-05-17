@@ -5,7 +5,10 @@ import {
   Pressable,
   ScrollView,
   ActivityIndicator,
+  Modal,
   useWindowDimensions,
+  ViewStyle,
+  StyleProp,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -24,7 +27,7 @@ import {
   type SessionSummary,
 } from '@/lib/practice';
 import { Chessboard, type ChessboardMove } from '@/components/Chessboard';
-import { colorTheme } from '@/hooks/useColorTheme';
+import { useColorTheme } from '@/hooks/useColorTheme';
 import type { Node, Opening } from '@/types';
 
 const OPPONENT_DELAY_MS = 300;
@@ -39,6 +42,7 @@ function findNodeById(root: Node, id: string): Node | null {
 }
 
 export default function PracticeScreen() {
+  const { colors: colorTheme } = useColorTheme();
   const params = useLocalSearchParams<{ id: string; mode?: string; from?: string }>();
   const id = params.id;
   const mode = (params.mode as PracticeMode) ?? 'learn';
@@ -52,8 +56,11 @@ export default function PracticeScreen() {
   const [session, setSession] = useState<PracticeSession | null>(null);
   const [banner, setBanner] = useState<{ text: string; kind: 'info' | 'warn' | 'err' } | null>(null);
   const [revealedSans, setRevealedSans] = useState<string[] | null>(null);
+  const [hintSquares, setHintSquares] = useState<Record<string,StyleProp<ViewStyle>>>({});
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [savingFinalize, setSavingFinalize] = useState(false);
+  const [confirmEndEarly, setConfirmEndEarly] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const bannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Load ──────────────────────────────────────────────────────────────────
@@ -61,6 +68,13 @@ export default function PracticeScreen() {
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
+    setLoading(true);
+    setSummary(null);
+    setSession(null);
+    setBanner(null);
+    setRevealedSans(null);
+    setHintSquares({});
+    setSavingFinalize(false);
     (async () => {
       try {
         const [op, nodes, learned] = await Promise.all([
@@ -80,14 +94,14 @@ export default function PracticeScreen() {
       }
     })();
     return () => { cancelled = true; };
-  }, [id, mode, fromNodeId]);
+  }, [id, mode, fromNodeId, reloadKey]);
 
   // ── Banner ────────────────────────────────────────────────────────────────
 
-  const showBanner = useCallback((text: string, kind: 'info' | 'warn' | 'err') => {
+  const showBanner = useCallback((text: string, kind: 'info' | 'warn' | 'err', timeout = 2500) => {
     if (bannerTimer.current) clearTimeout(bannerTimer.current);
     setBanner({ text, kind });
-    bannerTimer.current = setTimeout(() => setBanner(null), 2500);
+    bannerTimer.current = setTimeout(() => setBanner(null), timeout);
   }, []);
 
   useEffect(() => () => { if (bannerTimer.current) clearTimeout(bannerTimer.current); }, []);
@@ -100,6 +114,31 @@ export default function PracticeScreen() {
       setSession((s) => {
         if (!s || s.status !== 'opponent-to-move') return s;
         return opponentMove(s).session;
+      });
+    }, OPPONENT_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [session?.status, session?.currentNode.id]);
+
+  // ── Learn-mode auto-skip ──────────────────────────────────────────────────
+  // "From beginning" doesn't mean making the user replay the entire opening.
+  // It means: traverse the tree, only stopping where something still needs to
+  // be learned. Auto-play through user moves the user already knows (learned
+  // learnables) and through forced branching choices.
+  useEffect(() => {
+    if (!session || session.status !== 'awaiting-user') return;
+    if (session.options.mode !== 'learn') return;
+    const applicable = applicableChildren(session);
+    if (applicable.length !== 1) return;
+    const target = applicable[0];
+    const targetLearnable = session.learnableMap.get(target.id) ?? false;
+    const isTeachingMove = targetLearnable && !session.options.learnedNodeIds.has(target.id);
+    if (isTeachingMove) return;
+    const san = target.move_san;
+    if (!san) return;
+    const t = setTimeout(() => {
+      setSession((s) => {
+        if (!s || s.status !== 'awaiting-user') return s;
+        return attemptMove(s, san).session;
       });
     }, OPPONENT_DELAY_MS);
     return () => clearTimeout(t);
@@ -128,7 +167,10 @@ export default function PracticeScreen() {
   }, [session?.status]);
 
   // Reset reveal on advance
-  useEffect(() => { setRevealedSans(null); }, [session?.currentNode.id]);
+  useEffect(() => { 
+    setHintSquares({});
+    setRevealedSans(null); 
+  }, [session?.currentNode.id]);
 
   // ── Move handler ──────────────────────────────────────────────────────────
 
@@ -137,7 +179,10 @@ export default function PracticeScreen() {
     const out = attemptMove(session, move.san);
     setSession(out.session);
     if (out.verdict === 'correct') {
-      // silent
+      if (mode === 'learn' && session.wrongAttemptsHere > 0) {
+        showBanner('Correct — but you stumbled. We\'ll re-ask this at the end.', 'info');
+      }
+      else showBanner('Correct', 'info', 500);
     } else if (out.verdict === 'wrong') {
       showBanner(out.reason ?? 'Wrong move.', 'err');
     } else if (out.verdict === 'wrong-disallowed') {
@@ -149,14 +194,66 @@ export default function PracticeScreen() {
 
   const handleHint = useCallback(() => {
     if (!session || session.status !== 'awaiting-user') return;
-    const { session: next, hint } = showHint(session, 2);
+    const nextLevel: 1 | 2 = session.hintLevel === 0 ? 1 : 2;
+    const { session: next, hint } = showHint(session, nextLevel);
     setSession(next);
+    if (nextLevel === 1) {
+      const styles: Record<string, StyleProp<ViewStyle>> = {};
+      for (const sq of hint.fromSquares) {
+        styles[sq] = { boxShadow: `inset 0 0 0 3px ${colorTheme.accent.default}` };
+      }
+      setHintSquares(styles);
+    } else if (nextLevel === 2 && hint.sans) {
+      setRevealedSans(hint.sans);
+    }
     if (hint.sans) setRevealedSans(hint.sans);
+  }, [session]);
+
+  // ── End early ────────────────────────────────────────────────────────────
+  // Stop now; the completion effect saves `firstTryCorrect` as review_cards.
+
+  const handleEndEarly = useCallback(() => {
+    if (!session || session.status === 'complete') return;
+    setConfirmEndEarly(true);
+  }, [session]);
+
+  const confirmEnd = useCallback(() => {
+    setConfirmEndEarly(false);
+    setSession((s) => (s ? { ...s, status: 'complete' } : s));
+  }, []);
+
+  const endEarlyStats = useMemo(() => {
+    if (!session) return null;
+    const learnedNow = Array.from(session.firstTryCorrect).filter(
+      (nid) => !session.options.learnedNodeIds.has(nid),
+    ).length;
+    const remaining = Math.max(0, session.totalApplicable - session.completedApplicable);
+    return { learnedNow, remaining };
   }, [session]);
 
   const choiceCount = useMemo(() => {
     if (!session || session.status !== 'awaiting-user') return 0;
     return applicableChildren(session).length;
+  }, [session]);
+
+  // Draw a "danger arrow" from→to on the board for each child that's already
+  // done this session (or whose subtree has nothing left applicable), so the
+  // user is steered away from picking it again.
+  const doneArrows = useMemo(() => {
+    const out: Array<{ from: string; to: string }> = [];
+    if (!session || session.status !== 'awaiting-user') return out;
+    const userIsToMove = session.currentNode.fen.split(' ')[1] === (session.options.userColor === 'white' ? 'w' : 'b');
+    if (!userIsToMove) return out;
+    for (const c of session.currentNode.children ?? []) {
+      const uci = c.move_uci ?? '';
+      const from = uci.slice(0, 2);
+      const to = uci.slice(2, 4);
+      if (!from || !to) continue;
+      const practiced = session.practicedChildIds.has(c.id);
+      const exhausted = (session.applicableCounts.get(c.id) ?? 0) === 0;
+      if (practiced || exhausted) out.push({ from, to });
+    }
+    return out;
   }, [session]);
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -186,13 +283,14 @@ export default function PracticeScreen() {
         openingId={id}
         mode={mode}
         summary={summary}
-        onAgain={() => {
+        onRestart={() => setReloadKey((k) => k + 1)}
+        onPractice={() => {
           setSummary(null);
-          router.replace({ pathname: '/practice/[id]', params: { id, mode } } as any);
+          router.replace({ pathname: '/practice/[id]', params: { id, mode: 'practice' } } as any);
         }}
-        onDone={() => router.replace({ pathname: '/opening/[id]', params: { id } } as any)}
+        onDone={() => router.back()}
         onOpenMistake={(nodeId) =>
-          router.replace({ pathname: '/opening/[id]', params: { id, node: nodeId } } as any)
+          router.navigate({ pathname: '/opening/[id]', params: { id, node: nodeId } } as any)
         }
       />
     );
@@ -215,6 +313,11 @@ export default function PracticeScreen() {
             {isLearn ? 'Learn' : 'Practice'}
           </Text>
         </View>
+        {session.phase === 'requeue' && (
+          <View className="px-2 py-0.5 rounded bg-gold/15">
+            <Text className="text-gold text-xs font-medium">Re-prompt · {session.requeueEntries.length}</Text>
+          </View>
+        )}
         <Text className="text-content-primary text-base font-semibold flex-1" numberOfLines={1}>
           {opening.name}
         </Text>
@@ -232,25 +335,47 @@ export default function PracticeScreen() {
       </View>
 
       {/* Status row */}
-      <View className="flex-row items-center px-4 py-2 min-h-[28px]">
+      <View className="flex-row items-center px-4 py-2 min-h-[40px]">
         {session.status === 'awaiting-user' && choiceCount > 1 && (
           <Text className="text-xs text-content-secondary">{choiceCount} choices</Text>
         )}
         {session.status === 'opponent-to-move' && (
-          <Text className="text-xs text-content-muted italic">Opponent is moving…</Text>
+          <Text className="text-xs text-content-muted italic">...</Text>
         )}
         <View style={{ flex: 1 }} />
-        {session.status === 'awaiting-user' && (
-          <Pressable onPress={handleHint} className="px-2 py-1 rounded-md bg-accent/10 active:bg-accent/20">
-            <Text className="text-accent text-xs font-medium">Hint</Text>
+        {isLearn && session.status !== 'complete' && (
+          <Pressable
+            onPress={handleEndEarly}
+            className="px-2 py-1 mr-2 rounded-md bg-bg-elevated active:bg-bg-surface border border-border"
+          >
+            <Text className="text-content-secondary text-xs font-medium">End early</Text>
           </Pressable>
         )}
+        <Pressable onPress={session.status === 'awaiting-user' ? handleHint : ()=>{}} className="px-2 py-1 rounded-md bg-accent/10 active:bg-accent/20">
+          <Text className="text-accent text-xs font-medium">Hint</Text>
+        </Pressable>
+      </View>
+
+
+      {/* Board */}
+      <View className="items-center px-3">
+        <View style={{ width: boardSize }}>
+          <Chessboard
+            fen={session.currentNode.fen}
+            orientation={opening.color}
+            onMove={handleMove}
+            disabled={session.status !== 'awaiting-user'}
+            squareStyles={hintSquares}
+            size={boardSize}
+            arrows={ mode == 'learn' ? [] : doneArrows}
+          />
+        </View>
       </View>
 
       {/* Banners */}
       {banner && (
         <View
-          className={`mx-4 mb-2 px-3 py-2 rounded-md border ${
+          className={`mx-4 mt-2 px-3 py-2 rounded-md border ${
             banner.kind === 'err' ? 'bg-danger/15 border-danger/30' :
             banner.kind === 'warn' ? 'bg-gold/15 border-gold/30' :
             'bg-bg-elevated border-border'
@@ -268,31 +393,54 @@ export default function PracticeScreen() {
         </View>
       )}
       {revealedSans && revealedSans.length > 0 && (
-        <View className="mx-4 mb-2 px-3 py-2 rounded-md bg-accent/10 border border-accent/20">
+        <View className="mx-4 mt-2 px-3 py-2 rounded-md bg-accent/10 border border-accent/20">
           <Text className="text-accent text-sm">Answer: {revealedSans.join(' or ')}</Text>
         </View>
       )}
 
-      {/* Board */}
-      <View className="items-center px-3">
-        <View style={{ width: boardSize }}>
-          <Chessboard
-            fen={session.currentNode.fen}
-            orientation={opening.color}
-            onMove={handleMove}
-            disabled={session.status !== 'awaiting-user'}
-          />
-        </View>
-      </View>
-
-      {/* Last move */}
-      {session.currentNode.move_san && (
-        <View className="px-4 py-2 items-center">
-          <Text className="text-content-secondary text-sm">
-            Last move: <Text className={`font-medium ${isLearn ? 'text-accent' : 'text-gold'}`}>{session.currentNode.move_san}</Text>
-          </Text>
-        </View>
-      )}
+      <Modal
+        visible={confirmEndEarly && !!endEarlyStats}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmEndEarly(false)}
+      >
+        <Pressable
+          onPress={() => setConfirmEndEarly(false)}
+          className="flex-1 items-center justify-center bg-black/60 px-4"
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            className="bg-bg-elevated border border-border rounded-xl p-6 w-full max-w-sm"
+          >
+            <Text className="text-content-primary font-semibold mb-1">End learning early?</Text>
+            <Text className="text-content-muted text-sm mb-4">
+              <Text className="text-accent font-medium">{endEarlyStats?.learnedNow ?? 0}</Text>
+              <Text>{' '}position{(endEarlyStats?.learnedNow ?? 0) === 1 ? '' : 's'} you got on the first try will be marked learned.</Text>
+              {(endEarlyStats?.remaining ?? 0) > 0 && (
+                <>
+                  <Text>{' '}</Text>
+                  <Text className="text-content-secondary">{endEarlyStats?.remaining}</Text>
+                  <Text>{' '}position{(endEarlyStats?.remaining ?? 0) === 1 ? '' : 's'} will remain unlearned for next time.</Text>
+                </>
+              )}
+            </Text>
+            <View className="flex-row gap-2">
+              <Pressable
+                onPress={() => setConfirmEndEarly(false)}
+                className="flex-1 py-3 rounded-lg border border-border items-center active:bg-bg-surface"
+              >
+                <Text className="text-content-secondary text-sm">Keep going</Text>
+              </Pressable>
+              <Pressable
+                onPress={confirmEnd}
+                className="flex-1 py-3 rounded-lg bg-accent items-center active:opacity-80"
+              >
+                <Text className="text-bg-base text-sm font-medium">End now</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -300,16 +448,18 @@ export default function PracticeScreen() {
 // ── Summary ────────────────────────────────────────────────────────────────
 
 function SummaryScreen({
-  opening, openingId, mode, summary, onAgain, onDone, onOpenMistake,
+  opening, mode, summary, onRestart, onPractice, onDone, onOpenMistake,
 }: {
   opening: Opening;
   openingId: string;
   mode: PracticeMode;
   summary: SessionSummary;
-  onAgain: () => void;
+  onRestart: () => void;
+  onPractice: () => void;
   onDone: () => void;
   onOpenMistake: (nodeId: string) => void;
 }) {
+  const endedEarly = mode === 'learn' && summary.completedApplicable < summary.totalApplicable;
   return (
     <SafeAreaView className="flex-1 bg-bg-base">
       <ScrollView contentContainerStyle={{ padding: 20 }}>
@@ -350,9 +500,12 @@ function SummaryScreen({
           <Pressable onPress={onDone} className="flex-1 py-3 rounded-lg border border-border items-center">
             <Text className="text-content-secondary text-sm">Done</Text>
           </Pressable>
-          <Pressable onPress={onAgain} className="flex-1 py-3 rounded-lg bg-accent items-center">
+          <Pressable
+            onPress={endedEarly ? onRestart : (mode === 'practice' ? onRestart : onPractice)}
+            className="flex-1 py-3 rounded-lg bg-accent items-center"
+          >
             <Text className="text-bg-base text-sm font-medium">
-              {mode === 'learn' ? 'Learn again' : 'Practice again'}
+              {endedEarly ? 'Keep learning' : mode === 'learn' ? 'Practice more' : 'Practice again'}
             </Text>
           </Pressable>
         </View>

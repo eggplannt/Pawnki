@@ -13,16 +13,25 @@ function getInitialTheme(): Theme {
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
-/** Flatten palette object → CSS custom property entries.
- *  { bg: { base: '#fff' } }         → { '--color-bg-base': '#fff' }
- *  { accent: { DEFAULT: '#0f0' } }  → { '--color-accent': '#0f0' }
+/** Convert "#rrggbb" → "r g b" channel string for `rgb(var(--x) / <alpha>)`. */
+function hexToRgbChannels(hex: string): string {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `${r} ${g} ${b}`;
+}
+
+/** Flatten palette object → CSS custom property entries with rgb channels.
+ *  { bg: { base: '#fff' } }         → { '--color-bg-base': '255 255 255' }
+ *  { accent: { DEFAULT: '#0f0' } }  → { '--color-accent': '0 255 0' }
  */
 function flattenToCssVars(obj: Record<string, unknown>, prefix = '--color'): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(obj)) {
     const varName = key === 'DEFAULT' ? prefix : `${prefix}-${key}`;
     if (typeof value === 'string') {
-      result[varName] = value;
+      result[varName] = hexToRgbChannels(value);
     } else {
       Object.assign(result, flattenToCssVars(value as Record<string, unknown>, varName));
     }
@@ -49,9 +58,12 @@ function applyTheme(theme: Theme) {
   applyPalette(palettes[theme]);
 }
 
-/** Read a CSS custom property from :root. */
+/** Read a CSS custom property and reassemble as an `rgb(...)` color.
+ *  Vars are stored as "r g b" channels (for alpha composition in Tailwind);
+ *  raw consumers (SVGs, chart libs) need a real color string. */
 function cssVar(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const channels = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return channels ? `rgb(${channels})` : '';
 }
 
 /** Returns the current resolved color values (for third-party components). */

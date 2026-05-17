@@ -1,9 +1,10 @@
 import { View, Text } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppShell } from '@/components/AppShell';
-import { colorTheme } from '@/hooks/useColorTheme';
+import { useColorTheme } from '@/hooks/useColorTheme';
 
 export default function ReviewScreen() {
+  const { colors: colorTheme } = useColorTheme();
   return (
     <AppShell>
       <View className="flex-1 bg-bg-base p-8">

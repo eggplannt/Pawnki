@@ -3,6 +3,8 @@ import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
+import Icon from '@mdi/react';
+import { mdiChessKing } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
 import {
   getOpening, getNodes, buildTree,
@@ -11,7 +13,7 @@ import {
   linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical, getTranspositionTargets, getFirstChildId, positionKey,
 } from '@/lib/openings';
 import { getLearnedNodeIds } from '@/lib/review-cards';
-import { computeApplicableCounts } from '@/lib/practice';
+import { computeApplicableCounts, computeLearnableMap } from '@/lib/practice';
 import {
   importPgnToOpening,
   type ImportProgress,
@@ -120,8 +122,14 @@ type LinkTargetInfo = { node: Node; openingId: string; openingName: string; open
 const LinkTargetsContext = createContext<Map<string, LinkTargetInfo>>(new Map());
 
 // Threads learned-state into MoveButton for the unlearned/learned dot.
-interface LearnedCtx { learned: Set<string>; userColor: 'white' | 'black' | null }
-const LearnedContext = createContext<LearnedCtx>({ learned: new Set(), userColor: null });
+interface LearnedCtx {
+  learned: Set<string>;
+  userColor: 'white' | 'black' | null;
+  /** Per-node-id: whether that move is a unique-response user-move
+   *  (i.e. reviewable). Branching positions are not learnable. */
+  learnableMap: Map<string, boolean>;
+}
+const LearnedContext = createContext<LearnedCtx>({ learned: new Set(), userColor: null, learnableMap: new Map() });
 
 // ── Main Component ──────────────────────────────────────────────────────────
 
@@ -638,6 +646,22 @@ export default function OpeningDetail() {
     setContextMenu({ x: e.clientX, y: e.clientY, node });
   }, [parentMap]);
 
+  const openingColor = opening?.color;
+
+  const learnableMap = useMemo(() => {
+    // Return early from the memoized function if data isn't ready yet.
+    // (Return an empty map, array, or null depending on what computeLearnableMap expects)
+    if (!tree || !openingColor) return new Map();
+
+    return computeLearnableMap(tree, openingColor);
+  }, [tree, openingColor]);
+
+  const totalLearnable = (() => {
+    let n = 0;
+    for (const [, learnable] of learnableMap) if (learnable) n++;
+    return n;
+  })();
+
   // ── Render ───────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -665,21 +689,14 @@ export default function OpeningDetail() {
 
   const boardFen = pendingFen ?? currentNode?.fen ?? tree.fen;
   const boardOrientation = opening.color === 'white' ? 'white' : 'black';
-  // Count user-move nodes in the tree to decide Learn-button enable.
-  const openingColor = opening.color;
-  const totalUserMoves = (() => {
+  // Count user-move nodes that are LEARNABLE (unique-response). Branching
+  // positions aren't reviewable so they don't gate the Learn button.
+  const learnedLearnableCount = (() => {
     let n = 0;
-    function walk(node: Node) {
-      if (node.move_san !== null) {
-        const side = node.fen.split(' ')[1] === 'w' ? 'white' : 'black';
-        if (side !== openingColor) n++;
-      }
-      for (const c of node.children ?? []) walk(c);
-    }
-    walk(tree);
+    for (const nid of learnedNodeIds) if (learnableMap.get(nid)) n++;
     return n;
   })();
-  const hasUnlearned = learnedNodeIds.size < totalUserMoves;
+  const hasUnlearned = learnedLearnableCount < totalLearnable;
   const hasLearned = learnedNodeIds.size > 0;
   const hasLinkTarget = !!(currentNode?.transposes_to_node_id && transTargets.get(currentNode.transposes_to_node_id));
   const hasNext = !!(currentNode?.children?.length) || hasLinkTarget;
@@ -700,9 +717,12 @@ export default function OpeningDetail() {
             >
               ←
             </Link>
-            <span className={`text-lg shrink-0 ${opening.color === 'white' ? 'text-gold' : 'text-accent'}`}>
-              {opening.color === 'white' ? '♔' : '♚'}
-            </span>
+            <Icon
+              path={mdiChessKing}
+              size={0.9}
+              color={`rgb(var(--color-${opening.color === 'white' ? 'gold' : 'accent'}))`}
+              className="shrink-0"
+            />
             <h1 className="text-content-primary text-lg font-semibold truncate">{opening.name}</h1>
             <div className="ml-auto flex items-center gap-1 shrink-0">
               {saving && (
@@ -712,23 +732,22 @@ export default function OpeningDetail() {
                 onClick={() => setStartMode('learn')}
                 disabled={!hasUnlearned}
                 title={hasUnlearned ? 'Learn unlearned positions' : 'Everything in this opening is learned'}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                  hasUnlearned
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors inline-flex items-center gap-1 ${hasUnlearned
                     ? 'bg-accent/15 text-accent hover:bg-accent/25'
                     : 'bg-bg-elevated text-content-muted cursor-not-allowed'
-                }`}
+                  }`}
               >
+                {hasUnlearned && <span aria-hidden className="text-gold text-[0.85em] leading-none">▸</span>}
                 Learn
               </button>
               <button
                 onClick={() => setStartMode('practice')}
                 disabled={!hasLearned}
                 title={hasLearned ? 'Practice learned positions' : 'Learn this opening first to unlock practice'}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                  hasLearned
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${hasLearned
                     ? 'bg-gold/15 text-gold hover:bg-gold/25'
                     : 'bg-bg-elevated text-content-muted cursor-not-allowed'
-                }`}
+                  }`}
               >
                 Practice
               </button>
@@ -858,7 +877,7 @@ export default function OpeningDetail() {
           ) : (
             <div ref={moveListRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 pb-14 min-h-0">
               <LinkTargetsContext.Provider value={transTargets}>
-                <LearnedContext.Provider value={{ learned: learnedNodeIds, userColor: opening.color }}>
+                <LearnedContext.Provider value={{ learned: learnedNodeIds, userColor: opening.color, learnableMap }}>
                   <MoveTree
                     root={tree}
                     selected={currentNode}
@@ -950,9 +969,9 @@ export default function OpeningDetail() {
                   {reparentCount === 0
                     ? 'The original position has no continuations yet, so nothing else will move.'
                     : <>
-                        <span className="text-content-primary font-medium">{reparentCount}</span> continuation
-                        {reparentCount === 1 ? '' : 's'} will be re-rooted onto your current move.
-                      </>}
+                      <span className="text-content-primary font-medium">{reparentCount}</span> continuation
+                      {reparentCount === 1 ? '' : 's'} will be re-rooted onto your current move.
+                    </>}
                 </p>
                 <div className="flex gap-2">
                   <button
@@ -1539,9 +1558,14 @@ function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
   const prefix = movePrefix(node, forceNumber);
   const white = isWhiteMove(node);
   const linkTargets = useContext(LinkTargetsContext);
-  const { learned, userColor } = useContext(LearnedContext);
-  const isUserMove = userColor !== null && (node.fen.split(' ')[1] === 'w' ? 'white' : 'black') !== userColor && node.move_san !== null;
-  const isLearned = isUserMove && learned.has(node.id);
+  const { learned, userColor, learnableMap } = useContext(LearnedContext);
+  // This node is a "prompt" if its position is what the user studies to recall
+  // their next move — i.e. one of its children is a learnable, unlearned user move.
+  const isPrompt = userColor !== null && (node.children ?? []).some((c) => {
+    const cSide = c.fen.split(' ')[1] === 'w' ? 'white' : 'black';
+    const cIsUserMove = cSide !== userColor && c.move_san !== null;
+    return cIsUserMove && (learnableMap.get(c.id) ?? false) && !learned.has(c.id);
+  });
   const isLink = !!node.transposes_to_node_id;
   const target = node.transposes_to_node_id ? linkTargets.get(node.transposes_to_node_id) : null;
   const isCrossLink = !!(target && target.openingId !== node.opening_id);
@@ -1571,17 +1595,16 @@ function MoveButton({ node, selected, onSelect, onContextMenu, forceNumber }: {
               : 'text-content-secondary hover:bg-bg-elevated',
         ].join(' ')}
       >
-        <span>{node.move_san}</span>
-        {isUserMove && (
+        {isPrompt && (
           <span
             aria-hidden
-            title={isLearned ? 'Learned' : 'Not yet learned'}
-            className={[
-              'inline-block w-1.5 h-1.5 rounded-full self-center',
-              isLearned ? 'bg-accent' : 'bg-content-muted/40',
-            ].join(' ')}
-          />
+            title="Study this position — next move not yet learned"
+            className="text-gold text-[0.8em] leading-none self-center mr-0.5"
+          >
+            ▸
+          </span>
         )}
+        <span>{node.move_san}</span>
         {isLink && (
           <span
             aria-hidden

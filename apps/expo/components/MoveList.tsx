@@ -7,7 +7,7 @@ import {
   type ListRenderItemInfo,
 } from 'react-native';
 import type { Node } from '@/types';
-import { colorTheme } from '@/hooks/useColorTheme';
+import { useColorTheme } from '@/hooks/useColorTheme';
 
 // ── FEN helpers ──────────────────────────────────────────────────────────
 
@@ -119,17 +119,20 @@ interface MoveCellProps {
   isWhite: boolean;
   selected: boolean;
   linkKind: 'none' | 'intra' | 'cross';
-  /** 'none' = not a user-move (no dot), 'learned' / 'unlearned' = dot color. */
-  learnedKind: 'none' | 'learned' | 'unlearned';
+  /** This cell's resulting position is the prompt for an unlearned user move.
+   *  Renders a strong gold treatment so it's clearly "study this position". */
+  isPrompt: boolean;
   onSelect: (id: string) => void;
   onLongPress?: (id: string) => void;
 }
 
 const MoveCell = memo(function MoveCell({
-  id, san, isWhite, selected, linkKind, learnedKind, onSelect, onLongPress,
+  id, san, isWhite, selected, linkKind, isPrompt, onSelect, onLongPress,
 }: MoveCellProps) {
+  const { colors: colorTheme } = useColorTheme();
   const handlePress = useCallback(() => onSelect(id), [onSelect, id]);
   const handleLongPress = useCallback(() => onLongPress?.(id), [onLongPress, id]);
+  const showPrompt = isPrompt && !selected;
   return (
     <Pressable
       onPress={handlePress}
@@ -146,6 +149,18 @@ const MoveCell = memo(function MoveCell({
         borderColor: selected ? colorTheme.gold.default + '60' : 'transparent',
       }}
     >
+      {showPrompt && (
+        <Text
+          style={{
+            fontFamily: 'monospace',
+            fontSize: 11,
+            marginRight: 3,
+            color: colorTheme.gold.default,
+          }}
+        >
+          ▸
+        </Text>
+      )}
       <Text
         style={{
           fontFamily: 'monospace',
@@ -159,18 +174,6 @@ const MoveCell = memo(function MoveCell({
       >
         {san}
       </Text>
-      {learnedKind !== 'none' && (
-        <View
-          style={{
-            width: 5,
-            height: 5,
-            borderRadius: 5,
-            marginLeft: 4,
-            backgroundColor: learnedKind === 'learned' ? colorTheme.accent.default : colorTheme.content.muted,
-            opacity: learnedKind === 'learned' ? 1 : 0.5,
-          }}
-        />
-      )}
       {linkKind !== 'none' && (
         <Text
           style={{
@@ -194,15 +197,16 @@ interface RowProps {
   blackSelected: boolean;
   whiteLinkKind: 'none' | 'intra' | 'cross';
   blackLinkKind: 'none' | 'intra' | 'cross';
-  whiteLearnedKind: 'none' | 'learned' | 'unlearned';
-  blackLearnedKind: 'none' | 'learned' | 'unlearned';
+  whiteIsPrompt: boolean;
+  blackIsPrompt: boolean;
   onSelect: (id: string) => void;
   onLongPress?: (id: string) => void;
 }
 
 const Row = memo(function Row({
-  row, whiteSelected, blackSelected, whiteLinkKind, blackLinkKind, whiteLearnedKind, blackLearnedKind, onSelect, onLongPress,
+  row, whiteSelected, blackSelected, whiteLinkKind, blackLinkKind, whiteIsPrompt, blackIsPrompt, onSelect, onLongPress,
 }: RowProps) {
+  const { colors: colorTheme } = useColorTheme();
   const isVariation = row.depth > 0;
   return (
     <View
@@ -235,7 +239,7 @@ const Row = memo(function Row({
           isWhite
           selected={whiteSelected}
           linkKind={whiteLinkKind}
-          learnedKind={whiteLearnedKind}
+          isPrompt={whiteIsPrompt}
           onSelect={onSelect}
           onLongPress={onLongPress}
         />
@@ -259,7 +263,7 @@ const Row = memo(function Row({
           isWhite={false}
           selected={blackSelected}
           linkKind={blackLinkKind}
-          learnedKind={blackLearnedKind}
+          isPrompt={blackIsPrompt}
           onSelect={onSelect}
           onLongPress={onLongPress}
         />
@@ -277,6 +281,10 @@ interface MoveListProps {
   linkKinds?: Map<string, 'intra' | 'cross'>;
   /** Set of node ids that are user-move nodes that have been learned. */
   learnedSet?: Set<string>;
+  /** Set of node ids that are LEARNABLE user-moves (unique-response).
+   *  Only learnable+unlearned moves get the warning indicator; branching
+   *  positions get nothing. */
+  learnableSet?: Set<string>;
   /** Opening color so we can decide which nodes are user-moves. */
   userColor?: 'white' | 'black';
   onSelect: (id: string) => void;
@@ -284,9 +292,29 @@ interface MoveListProps {
 }
 
 export const MoveList = memo(function MoveList({
-  root, selectedId, linkKinds, learnedSet, userColor, onSelect, onLongPress,
+  root, selectedId, linkKinds, learnedSet, learnableSet, userColor, onSelect, onLongPress,
 }: MoveListProps) {
+  const { colors: colorTheme } = useColorTheme();
   const rows = useMemo(() => flattenTree(root), [root]);
+
+  // Opponent-move ids whose immediate user-move child is learnable + unlearned.
+  // The opponent move is the position the user studies to recall their reply.
+  const promptSet = useMemo(() => {
+    const out = new Set<string>();
+    if (!userColor || !learnableSet) return out;
+    const ls = learnableSet;
+    function walk(n: Node) {
+      for (const c of n.children ?? []) {
+        const childIsUserMove = isWhiteMove(c) ? userColor === 'white' : userColor === 'black';
+        if (childIsUserMove && ls.has(c.id) && !learnedSet?.has(c.id)) {
+          out.add(n.id);
+        }
+        walk(c);
+      }
+    }
+    walk(root);
+    return out;
+  }, [root, learnableSet, learnedSet, userColor]);
 
   const idToIndex = useMemo(() => {
     const m = new Map<string, number>();
@@ -317,13 +345,6 @@ export const MoveList = memo(function MoveList({
 
   const renderItem = useCallback(
     ({ item }: ListRenderItemInfo<MoveRow>) => {
-      function learnedKind(nodeId?: string, isWhitePiece?: boolean): 'none' | 'learned' | 'unlearned' {
-        if (!nodeId || !userColor) return 'none';
-        // Node represents a move played by white iff isWhitePiece is true.
-        const moveWasUserColor = isWhitePiece ? userColor === 'white' : userColor === 'black';
-        if (!moveWasUserColor) return 'none';
-        return learnedSet?.has(nodeId) ? 'learned' : 'unlearned';
-      }
       return (
         <Row
           row={item}
@@ -331,14 +352,14 @@ export const MoveList = memo(function MoveList({
           blackSelected={!!item.blackId && item.blackId === selectedId}
           whiteLinkKind={item.whiteId ? (linkKinds?.get(item.whiteId) ?? 'none') : 'none'}
           blackLinkKind={item.blackId ? (linkKinds?.get(item.blackId) ?? 'none') : 'none'}
-          whiteLearnedKind={learnedKind(item.whiteId, true)}
-          blackLearnedKind={learnedKind(item.blackId, false)}
+          whiteIsPrompt={!!item.whiteId && promptSet.has(item.whiteId)}
+          blackIsPrompt={!!item.blackId && promptSet.has(item.blackId)}
           onSelect={onSelect}
           onLongPress={onLongPress}
         />
       );
     },
-    [selectedId, onSelect, onLongPress, linkKinds, learnedSet, userColor],
+    [selectedId, onSelect, onLongPress, linkKinds, promptSet],
   );
 
   const keyExtractor = useCallback((item: MoveRow) => item.key, []);
