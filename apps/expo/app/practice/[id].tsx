@@ -13,9 +13,12 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { getOpening, getNodes, buildTree } from '@/lib/openings';
-import { getLearnedNodeIds, markPositionsLearned } from '@/lib/reviews';
 import {
+  getOpening,
+  getNodes,
+  buildTree,
+  getLearnedNodeIds,
+  markPositionsLearned,
   startSession,
   attemptMove,
   opponentMove,
@@ -25,10 +28,11 @@ import {
   type PracticeSession,
   type PracticeMode,
   type SessionSummary,
-} from '@/lib/practice';
+  type Node,
+  type Opening,
+} from '@pawntree/shared';
 import { Chessboard, type ChessboardMove } from '@/components/Chessboard';
 import { useColorTheme } from '@/hooks/useColorTheme';
-import type { Node, Opening } from '@/types';
 
 const OPPONENT_DELAY_MS = 300;
 // Stable empty-arrows reference: passing `[]` inline would defeat

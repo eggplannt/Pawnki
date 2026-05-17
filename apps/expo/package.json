@@ -12,6 +12,7 @@
     "gen:types": "supabase gen types typescript --local 2>/dev/null > types/database.types.ts"
   },
   "dependencies": {
+    "@pawntree/shared": "workspace:*",
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native/js-polyfills": "^0.85.3",

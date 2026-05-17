@@ -1,12 +1,17 @@
-import { supabase } from './supabase';
+import { getDb } from './db';
 import { applySm2, addDays, todayYmd, type Quality, type CardState } from './sm2';
-import type { Node, Opening, Review } from '@/types';
+import type { Node, Opening, Review } from '../types';
 
-// The underlying table is named `review_cards` (legacy schema). In code/UI we
-// treat each row as a "review" of a position — not a flashcard.
+// Note: the underlying table is named `review_cards` (legacy from initial
+// schema). In code/UI we treat each row as a "review" of a position — not a
+// flashcard. Don't rename the table; do prefer "review" / "position" in names.
 
+/**
+ * Return the set of node ids in this opening that the current user has already
+ * learned (i.e. has a review row for).
+ */
 export async function getLearnedNodeIds(openingId: string): Promise<Set<string>> {
-  const { data, error } = await supabase
+  const { data, error } = await getDb()
     .from('review_cards')
     .select('node_id, nodes!inner(opening_id)')
     .eq('nodes.opening_id', openingId);
@@ -14,8 +19,31 @@ export async function getLearnedNodeIds(openingId: string): Promise<Set<string>>
   return new Set((data ?? []).map((r: any) => r.node_id));
 }
 
+/**
+ * Return position_keys of all learned nodes belonging to openings other than
+ * `excludeOpeningId`. Used to treat trunk transpositions as effectively learned
+ * when the same position + unique response was already learned elsewhere.
+ */
+export async function getCrossOpeningLearnedPositionKeys(excludeOpeningId: string): Promise<Set<string>> {
+  const { data, error } = await getDb()
+    .from('review_cards')
+    .select('nodes!inner(position_key, opening_id)');
+  if (error) throw error;
+  const out = new Set<string>();
+  for (const r of (data ?? []) as Array<{ nodes: { position_key: string; opening_id: string } | null }>) {
+    if (r.nodes && r.nodes.opening_id !== excludeOpeningId && r.nodes.position_key) {
+      out.add(r.nodes.position_key);
+    }
+  }
+  return out;
+}
+
+/**
+ * Return per-opening counts of learned positions for all openings the current
+ * user owns. Map keyed by opening_id.
+ */
 export async function getLearnedCountsByOpening(): Promise<Map<string, number>> {
-  const { data, error } = await supabase
+  const { data, error } = await getDb()
     .from('review_cards')
     .select('nodes!inner(opening_id)');
   if (error) throw error;
@@ -30,15 +58,16 @@ export async function getLearnedCountsByOpening(): Promise<Map<string, number>> 
 
 /**
  * Mark the given node ids as learned by inserting review rows. Skips ids that
- * already have a row. All SM-2 fields fall back to DB defaults so newly-learned
- * positions are immediately due for review.
+ * already have a row (returns the actually-inserted count). All SM-2 fields
+ * fall back to DB defaults (interval=1, ef=2.5, repetitions=0, due_date=today)
+ * so newly-learned positions are immediately due for review.
  */
 export async function markPositionsLearned(nodeIds: string[]): Promise<number> {
   if (nodeIds.length === 0) return 0;
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { user } } = await getDb().auth.getUser();
   if (!user) throw new Error('Not authenticated');
   const rows = nodeIds.map((id) => ({ node_id: id, user_id: user.id }));
-  const { data, error } = await supabase
+  const { data, error } = await getDb()
     .from('review_cards')
     .upsert(rows, { onConflict: 'node_id,user_id', ignoreDuplicates: true })
     .select('id');
@@ -51,18 +80,27 @@ export async function markPositionsLearned(nodeIds: string[]): Promise<number> {
 export interface ReviewItem {
   review: Review;
   node: Node;
-  /** Parent node — its fen is the board position the user sees. */
+  /** Parent node — its fen is the board position the user sees (with user to move). */
   parent: Node;
   opening: Pick<Opening, 'id' | 'name' | 'color'>;
-  /** All valid SAN moves at the parent position (siblings sharing parent_id). */
+  /** All valid SAN moves at the parent position (siblings sharing parent_id).
+   *  Used to accept any-correct-answer at branching positions. */
   acceptedSans: string[];
-  /** From-squares of the accepted moves (deduped). For hint highlighting. */
+  /** From-squares of the accepted moves (deduped). Used for hint highlighting. */
   acceptedFromSquares: string[];
 }
 
+/**
+ * Fetch all reviews due on or before today, joined with their node, parent
+ * node, and opening info. Reviews whose node has no parent (the opening root)
+ * are skipped — there's no position to quiz from.
+ */
 export async function getDueReviews(): Promise<ReviewItem[]> {
   const today = todayYmd();
-  const { data, error } = await supabase
+  // Due iff: scheduled on/before today, OR never reviewed yet (a freshly-
+  // learned position with no first review must always surface, regardless of
+  // its due_date default).
+  const { data, error } = await getDb()
     .from('review_cards')
     .select(`
       *,
@@ -80,8 +118,8 @@ export async function getDueReviews(): Promise<ReviewItem[]> {
   if (parentIds.length === 0) return [];
 
   const [{ data: parents, error: pErr }, { data: siblings, error: sErr }] = await Promise.all([
-    supabase.from('nodes').select('*').in('id', parentIds),
-    supabase.from('nodes').select('id, move_san, move_uci, parent_id, opening_id').in('parent_id', parentIds),
+    getDb().from('nodes').select('*').in('id', parentIds),
+    getDb().from('nodes').select('id, move_san, move_uci, parent_id, opening_id').in('parent_id', parentIds),
   ]);
   if (pErr) throw pErr;
   if (sErr) throw sErr;
@@ -122,6 +160,9 @@ export async function getDueReviews(): Promise<ReviewItem[]> {
   return out;
 }
 
+/**
+ * Apply SM-2 to a review given the user's grade and persist the new state.
+ */
 export async function gradeReview(
   review: Review,
   quality: Quality,
@@ -133,7 +174,7 @@ export async function gradeReview(
   };
   const next = applySm2(prev, quality);
   const dueDate = addDays(todayYmd(), next.interval);
-  const { error } = await supabase
+  const { error } = await getDb()
     .from('review_cards')
     .update({
       interval: next.interval,
@@ -150,16 +191,19 @@ export async function gradeReview(
 export interface ReviewStats {
   dueToday: number;
   totalLearned: number;
+  /** % of positions with repetitions >= 2 among those reviewed at least once.
+   *  Rough proxy for retention. */
   retention: number | null;
 }
 
 export async function getReviewStats(): Promise<ReviewStats> {
   const today = todayYmd();
+  const db = getDb();
   const [dueRes, totalRes, reviewedRes, retainedRes] = await Promise.all([
-    supabase.from('review_cards').select('id', { count: 'exact', head: true }).or(`due_date.lte.${today},last_reviewed.is.null`),
-    supabase.from('review_cards').select('id', { count: 'exact', head: true }),
-    supabase.from('review_cards').select('id', { count: 'exact', head: true }).not('last_reviewed', 'is', null),
-    supabase.from('review_cards').select('id', { count: 'exact', head: true }).gte('repetitions', 2),
+    db.from('review_cards').select('id', { count: 'exact', head: true }).or(`due_date.lte.${today},last_reviewed.is.null`),
+    db.from('review_cards').select('id', { count: 'exact', head: true }),
+    db.from('review_cards').select('id', { count: 'exact', head: true }).not('last_reviewed', 'is', null),
+    db.from('review_cards').select('id', { count: 'exact', head: true }).gte('repetitions', 2),
   ]);
   if (dueRes.error) throw dueRes.error;
   if (totalRes.error) throw totalRes.error;

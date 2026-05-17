@@ -21,8 +21,10 @@ import {
   getReviewStats,
   type ReviewItem,
   type ReviewStats,
-} from '@/lib/reviews';
-import { applySm2, intervalLabel, type Quality } from '@/lib/sm2';
+  applySm2,
+  intervalLabel,
+  type Quality,
+} from '@pawntree/shared';
 
 type Stage = 'entry' | 'session' | 'done';
 type AttemptState =

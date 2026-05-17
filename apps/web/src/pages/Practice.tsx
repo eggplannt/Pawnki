@@ -3,9 +3,12 @@ import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom'
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import { AppShell } from '@/components/AppShell';
-import { getOpening, getNodes, buildTree } from '@/lib/openings';
-import { getLearnedNodeIds, markPositionsLearned } from '@/lib/reviews';
 import {
+  getOpening,
+  getNodes,
+  buildTree,
+  getLearnedNodeIds,
+  markPositionsLearned,
   startSession,
   attemptMove,
   opponentMove,
@@ -15,10 +18,11 @@ import {
   type PracticeSession,
   type PracticeMode,
   type SessionSummary,
-} from '@/lib/practice';
+  type Node,
+  type Opening,
+} from '@pawntree/shared';
 import { useColorTheme } from '@/hooks/useColorTheme';
 import { legalTargetStyles } from '@/lib/board-highlights';
-import type { Node, Opening } from '@/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -3,9 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Icon from '@mdi/react';
 import { mdiChessKing } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
-import { listOpenings, deleteOpening, getLearnableCountsByOpening } from '@/lib/openings';
-import { getLearnedCountsByOpening } from '@/lib/reviews';
-import type { Opening } from '@/types';
+import { listOpenings, deleteOpening, getLearnableCountsByOpening, getLearnedCountsByOpening, type Opening } from '@pawntree/shared';
 
 type Tab = 'white' | 'black';
 type OpeningWithStats = Opening & {
@@ -215,7 +213,7 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
 
 // ── Create Opening Modal ────────────────────────────────────────────────────
 
-import { createOpening, type ImportProgress } from '@/lib/openings';
+import { createOpening, type ImportProgress } from '@pawntree/shared';
 
 function CreateOpeningModal({
   defaultColor,

@@ -27,14 +27,18 @@ import {
   type ImportProgress,
   type CrossTranspositionMatch,
   type IntraTranspositionMatch,
-} from '@/lib/openings';
-import { getLearnedNodeIds } from '@/lib/reviews';
-import { computeApplicableCounts, computeLearnableMap } from '@/lib/practice';
+  getLearnedNodeIds,
+  getCrossOpeningLearnedPositionKeys,
+  computeApplicableCounts,
+  computeLearnableMap,
+  augmentLearnedWithTranspositions,
+  type Opening,
+  type Node,
+} from '@pawntree/shared';
 import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chessboard, type ChessboardMove } from '@/components/Chessboard';
 import { MoveList } from '@/components/MoveList';
 import { useColorTheme } from '@/hooks/useColorTheme';
-import type { Opening, Node } from '@/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -140,6 +144,7 @@ export default function OpeningDetailScreen() {
   const [crossSwitch, setCrossSwitch] = useState<{ targetInfo: TargetInfo; fromNodeId: string } | null>(null);
   const [currentHasTrans, setCurrentHasTrans] = useState(false);
   const [learnedNodeIds, setLearnedNodeIds] = useState<Set<string>>(new Set());
+  const [crossLearnedPositionKeys, setCrossLearnedPositionKeys] = useState<Set<string>>(new Set());
   const [startMode, setStartMode] = useState<'learn' | 'practice' | null>(null);
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
 
@@ -187,6 +192,13 @@ export default function OpeningDetailScreen() {
     return s;
   }, [learnableMap]);
 
+  const effectiveLearnedNodeIds = useMemo(
+    () => tree
+      ? augmentLearnedWithTranspositions(tree, opening.color, learnedNodeIds, learnableMap, crossLearnedPositionKeys)
+      : learnedNodeIds,
+    [tree, opening.color, learnedNodeIds, learnableMap, crossLearnedPositionKeys],
+  );
+
   const totalLearnable = useMemo(() => {
     let n = 0;
     for (const [, l] of learnableMap) if (l) n++;
@@ -195,9 +207,9 @@ export default function OpeningDetailScreen() {
 
   const learnedLearnableCount = useMemo(() => {
     let n = 0;
-    for (const id of learnedNodeIds) if (learnableMap.get(id)) n++;
+    for (const id of effectiveLearnedNodeIds) if (learnableMap.get(id)) n++;
     return n;
-  }, [learnableMap, learnedNodeIds]);
+  }, [learnableMap, effectiveLearnedNodeIds]);
 
   // Whether the current node has a transposition available (intra or cross)
   // — drives visibility of the Transpose re-prompt button.
@@ -265,14 +277,16 @@ export default function OpeningDetailScreen() {
       setLoading(true);
       setTreeReady(false);
       try {
-        const [op, nodes, learned] = await Promise.all([
+        const [op, nodes, learned, crossKeys] = await Promise.all([
           getOpening(id).catch(() => null),
           getNodes(id),
           getLearnedNodeIds(id).catch(() => new Set<string>()),
+          getCrossOpeningLearnedPositionKeys(id).catch(() => new Set<string>()),
         ]);
         if (cancelled) return;
         if (op) setOpening(op);
         setLearnedNodeIds(learned);
+        setCrossLearnedPositionKeys(crossKeys);
         const t = buildTree(nodes);
         setTree(t);
         // Honor ?node= deep link
@@ -697,7 +711,7 @@ export default function OpeningDetailScreen() {
   // branching positions don't count as needing to be learned.
   const openingColor = opening.color;
   const hasUnlearned = learnedLearnableCount < totalLearnable;
-  const hasLearned = learnedNodeIds.size > 0;
+  const hasLearned = effectiveLearnedNodeIds.size > 0;
 
   return (
     <SafeAreaView className="flex-1 bg-bg-base">
@@ -723,7 +737,7 @@ export default function OpeningDetailScreen() {
           disabled={!hasUnlearned}
           className={`px-2 py-1 rounded-md flex-row items-center gap-1 ${hasUnlearned ? 'bg-accent/15 active:bg-accent/25' : 'bg-bg-elevated'}`}
         >
-          {hasUnlearned && <Text className="text-gold text-xs">▸</Text>}
+          {hasUnlearned && <Text className="text-gold text-[8px]">●</Text>}
           <Text className={`text-xs font-medium ${hasUnlearned ? 'text-accent' : 'text-content-muted'}`}>Learn</Text>
         </Pressable>
         <Pressable
@@ -836,7 +850,7 @@ export default function OpeningDetailScreen() {
               root={tree}
               selectedId={selectedId}
               linkKinds={linkKinds}
-              learnedSet={learnedNodeIds}
+              learnedSet={effectiveLearnedNodeIds}
               learnableSet={learnableSet}
               userColor={openingColor}
               onSelect={selectNode}
@@ -872,7 +886,7 @@ export default function OpeningDetailScreen() {
         onRequestClose={() => setStartMode(null)}
       >
         {startMode && currentNode && (() => {
-          const counts = computeApplicableCounts(currentNode, openingColor, learnedNodeIds, startMode);
+          const counts = computeApplicableCounts(currentNode, openingColor, effectiveLearnedNodeIds, startMode);
           const fromHereCount = counts.get(currentNode.id) ?? 0;
           const fromHereEnabled = fromHereCount > 0;
           const fromRootEnabled = startMode === 'learn' ? hasUnlearned : hasLearned;

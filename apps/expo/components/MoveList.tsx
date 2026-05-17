@@ -6,7 +6,7 @@ import {
   FlatList,
   type ListRenderItemInfo,
 } from 'react-native';
-import type { Node } from '@/types';
+import type { Node } from '@pawntree/shared';
 import { useColorTheme } from '@/hooks/useColorTheme';
 
 // ── FEN helpers ──────────────────────────────────────────────────────────
@@ -153,12 +153,12 @@ const MoveCell = memo(function MoveCell({
         <Text
           style={{
             fontFamily: 'monospace',
-            fontSize: 11,
+            fontSize: 7,
             marginRight: 3,
             color: colorTheme.gold.default,
           }}
         >
-          ▸
+          ●
         </Text>
       )}
       <Text
