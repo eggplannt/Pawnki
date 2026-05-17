@@ -203,7 +203,7 @@ function OpeningCard({
         </View>
         <View className="flex-row items-center gap-2 flex-wrap">
           <View className="bg-bg-elevated px-2 py-1 rounded-md">
-            <Text className="text-content-muted text-xs">{opening.learnedCount} Positions in review</Text>
+            <Text className="text-content-muted text-xs">{opening.learnedCount} Position{opening.learnedCount === 1 ? "s" : ""} in repertoire</Text>
           </View>
           {opening.learnableCount === 0 ? (
             <View className="bg-bg-elevated px-2 py-1 rounded-md">
@@ -211,7 +211,7 @@ function OpeningCard({
             </View>
           ) : opening.learnedCount >= opening.learnableCount ? null : (
             <View className="bg-accent/15 px-2 py-1 rounded-md">
-              <Text className="text-accent text-xs font-medium">{opening.learnableCount - opening.learnedCount} to learn</Text>
+              <Text className="text-accent text-xs font-medium">{opening.learnableCount - opening.learnedCount} Position{opening.learnableCount - opening.learnedCount === 1 ? "s" : ""} to learn</Text>
             </View>
           )}
         </View>

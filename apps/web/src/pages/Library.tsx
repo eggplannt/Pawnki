@@ -170,7 +170,7 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-content-muted text-xs bg-bg-elevated px-2 py-1 rounded-md">
-            {opening.learnedCount} Position{opening.learnedCount !== 1 ? "s" : ""} in review
+            {opening.learnedCount} Position{opening.learnedCount !== 1 ? "s" : ""} in repertoire
           </span>
           {opening.learnableCount === 0 ? (
             <span className="bg-bg-elevated text-content-muted text-xs px-2 py-1 rounded-md italic">
