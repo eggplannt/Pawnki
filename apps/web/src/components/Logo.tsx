@@ -12,35 +12,35 @@ export function PawnTreeIcon({ size = 24, className = '' }: { size?: number; cla
       {/* Left leaf */}
       <path
         d="M14 8C11 5 7 4.5 5 6c-1 .8-.5 2.5 1 3.5 2 1.3 5 1.2 8-1.5z"
-        fill="var(--color-accent)"
+        fill="rgb(var(--color-accent))"
         opacity="0.8"
       />
       {/* Right leaf */}
       <path
         d="M18 8c3-3 7-3.5 9-2 1 .8.5 2.5-1 3.5-2 1.3-5 1.2-8-1.5z"
-        fill="var(--color-accent)"
+        fill="rgb(var(--color-accent))"
       />
       {/* Stem */}
       <path
         d="M15.5 9v4h1V9z"
-        fill="var(--color-accent-dim)"
+        fill="rgb(var(--color-accent-dim))"
       />
       {/* Pawn head */}
-      <circle cx="16" cy="17" r="5" fill="var(--color-gold)" />
+      <circle cx="16" cy="17" r="5" fill="rgb(var(--color-gold))" />
       {/* Pawn neck */}
       <path
         d="M13 22h6v3H13z"
-        fill="var(--color-gold)"
+        fill="rgb(var(--color-gold))"
         opacity="0.85"
       />
       {/* Pawn body */}
       <path
         d="M11 25h10l2 8H9l2-8z"
-        fill="var(--color-gold)"
+        fill="rgb(var(--color-gold))"
         opacity="0.9"
       />
       {/* Pawn base */}
-      <rect x="7" y="33" width="18" height="4" rx="1.5" fill="var(--color-gold)" />
+      <rect x="7" y="33" width="18" height="4" rx="1.5" fill="rgb(var(--color-gold))" />
     </svg>
   );
 }

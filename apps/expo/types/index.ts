@@ -20,13 +20,24 @@ export interface Node {
   move_san: string | null;
   move_uci: string | null;
   fen: string;
+  position_key: string;
   annotation: string | null;
   sort_order: number;
   created_at: string;
+  transposes_to_node_id: string | null;
   children?: Node[];
 }
 
-export interface ReviewCard {
+/** Resolved transposition target for a link node. */
+export interface TranspositionTarget {
+  node: Node;
+  opening: Pick<Opening, 'id' | 'name' | 'color'>;
+  sameOpening: boolean;
+}
+
+/** Row in the `review_cards` table — represents one review schedule for a
+ *  learned position. Table name is legacy; in code we call these reviews. */
+export interface Review {
   id: string;
   user_id: string;
   node_id: string;

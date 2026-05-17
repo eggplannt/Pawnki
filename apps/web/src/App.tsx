@@ -1,11 +1,13 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { ThemeContext, useThemeProvider } from '@/hooks/useColorTheme';
+import { NavHistoryProvider } from '@/hooks/useNavHistory';
 import Login from '@/pages/Login';
 import Library from '@/pages/Library';
 import Review from '@/pages/Review';
 import Settings from '@/pages/Settings';
 import OpeningDetail from '@/pages/OpeningDetail';
+import Practice from '@/pages/Practice';
 import AuthCallback from '@/pages/AuthCallback';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -74,6 +76,14 @@ function AppRoutes() {
         }
       />
       <Route
+        path="/practice/:id"
+        element={
+          <AuthGuard>
+            <Practice />
+          </AuthGuard>
+        }
+      />
+      <Route
         path="/review"
         element={
           <AuthGuard>
@@ -107,7 +117,9 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <AppRoutes />
+        <NavHistoryProvider>
+          <AppRoutes />
+        </NavHistoryProvider>
       </AuthProvider>
     </ThemeProvider>
   );

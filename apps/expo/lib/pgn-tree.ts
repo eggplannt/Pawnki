@@ -1,5 +1,13 @@
 import { Chess } from 'chess.js';
 
+/**
+ * Strip halfmove clock + fullmove number from a FEN so move-order
+ * variations of the same position compare equal.
+ */
+export function positionKey(fen: string): string {
+  return fen.split(' ').slice(0, 4).join(' ');
+}
+
 export interface PgnNode {
   move_san: string | null; // null for root
   move_uci: string | null;
@@ -51,7 +59,7 @@ function mergeTrees(a: PgnNode, b: PgnNode): PgnNode {
 
   for (const bChild of b.children) {
     // Look for an existing child with the same FEN (same position reached)
-    const match = merged.children.find((c) => c.fen === bChild.fen);
+    const match = merged.children.find((c) => positionKey(c.fen) === positionKey(bChild.fen));
     if (match) {
       // Same position — merge recursively
       const idx = merged.children.indexOf(match);
@@ -233,8 +241,8 @@ function parseTokens(
 
       const fen = chess.fen();
 
-      // Check if this parent already has a child with this FEN (merge within a game too)
-      const existing = currentParent.children.find((c) => c.fen === fen);
+      // Check if this parent already has a child with this position (merge within a game too)
+      const existing = currentParent.children.find((c) => positionKey(c.fen) === positionKey(fen));
       if (existing) {
         currentParent = existing;
       } else {

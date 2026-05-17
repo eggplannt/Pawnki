@@ -14,21 +14,17 @@ interface AppShellProps {
 }
 
 export function AppShell({ children }: AppShellProps) {
+  // Render `children` once, in a layout that adapts via flex-direction.
+  // Rendering twice (once per breakpoint) duplicates React state and DOM
+  // ids — libraries that use fixed element ids (react-chessboard's
+  // #chessboard-board) collide and break.
   return (
-    <>
-      {/* Desktop: sidebar layout (lg+) */}
-      <div className="hidden lg:flex h-full">
-        <Sidebar />
-        <main className="flex-1 overflow-auto">{children}</main>
-      </div>
-
-      {/* Mobile: header + bottom nav */}
-      <div className="flex lg:hidden flex-col h-full">
-        <MobileHeader />
-        <main className="flex-1 overflow-auto">{children}</main>
-        <BottomNav />
-      </div>
-    </>
+    <div className="flex flex-col lg:flex-row h-full">
+      <Sidebar />
+      <MobileHeader />
+      <main className="flex-1 overflow-auto">{children}</main>
+      <BottomNav />
+    </div>
   );
 }
 
@@ -37,7 +33,7 @@ function Sidebar() {
   const { theme, toggleTheme } = useColorTheme();
 
   return (
-    <aside className="w-56 flex flex-col bg-bg-surface border-r border-border py-6 shrink-0">
+    <aside className="hidden lg:flex w-56 flex-col bg-bg-surface border-r border-border py-6 shrink-0">
       <div className="px-5 mb-8">
         <PawnTreeLogo size="md" />
       </div>
@@ -98,7 +94,7 @@ function MobileHeader() {
   const { theme, toggleTheme } = useColorTheme();
 
   return (
-    <header className="h-13 bg-bg-surface border-b border-border flex items-center justify-between px-4 shrink-0">
+    <header className="lg:hidden h-13 bg-bg-surface border-b border-border flex items-center justify-between px-4 shrink-0">
       <div className="flex items-center gap-2">
         <PawnTreeIcon size={20} />
         <span className="text-lg font-bold tracking-tight">
@@ -119,7 +115,7 @@ function MobileHeader() {
 
 function BottomNav() {
   return (
-    <nav className="bg-bg-surface border-t border-border flex shrink-0">
+    <nav className="lg:hidden bg-bg-surface border-t border-border flex shrink-0">
       {NAV_ITEMS.map(({ label, to, icon }) => (
         <NavLink
           key={to}
