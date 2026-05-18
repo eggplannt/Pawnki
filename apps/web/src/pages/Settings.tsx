@@ -1,8 +1,9 @@
+import { useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme, type ThemePref, type BoardPaletteKey } from '@/hooks/useColorTheme';
 import { useReviewOrder, type ReviewOrder } from '@/hooks/useReviewOrder';
-import { boardPalettes, BOARD_PALETTE_KEYS } from '@pawnki/shared';
+import { boardPalettes, BOARD_PALETTE_KEYS, deleteMyAccount } from '@pawnki/shared';
 
 const THEME_OPTIONS: { value: ThemePref; label: string; icon: string }[] = [
   { value: 'system', label: 'System', icon: '⊙' },
@@ -20,6 +21,23 @@ export default function Settings() {
   const { user, signOut } = useAuth();
   const { pref, setPref, boardPref, setBoardPref } = useColorTheme();
   const [reviewOrder, setReviewOrder] = useReviewOrder();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function handleDeleteAccount() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteMyAccount();
+      // Server-side row is gone; clear the local session too.
+      await signOut();
+    } catch (e: any) {
+      setDeleteError(e?.message ?? 'Could not delete account. Try again.');
+      setDeleting(false);
+    }
+  }
 
   return (
     <AppShell>
@@ -96,13 +114,75 @@ export default function Settings() {
           </div>
         </section>
 
-        <button
-          onClick={signOut}
-          className="text-sm text-content-secondary hover:text-content-primary border border-border rounded-lg px-4 py-2 transition-colors"
-        >
-          Sign out
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={signOut}
+            className="text-sm text-content-secondary hover:text-content-primary border border-border rounded-lg px-4 py-2 transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
+
+        <section className="mt-12 pt-6 border-t border-danger/20">
+          <h2 className="text-danger text-xs font-medium uppercase tracking-wider mb-2">Danger zone</h2>
+          <p className="text-content-muted text-sm mb-3">
+            Permanently delete your account, every opening, and all review history. This can't be undone.
+          </p>
+          <button
+            onClick={() => { setConfirmDelete(true); setDeleteConfirmText(''); setDeleteError(null); }}
+            className="text-sm text-danger border border-danger/40 rounded-lg px-4 py-2 hover:bg-danger/10 transition-colors"
+          >
+            Delete account
+          </button>
+        </section>
       </div>
+
+      {confirmDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => !deleting && setConfirmDelete(false)}
+        >
+          <div
+            className="bg-bg-elevated border border-danger/40 rounded-xl p-6 max-w-md mx-4 w-full shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-content-primary font-semibold mb-2">Delete account?</h3>
+            <p className="text-content-secondary text-sm mb-3">
+              This permanently removes your account and every opening, tree, review, and streak. There is no recovery.
+            </p>
+            <p className="text-content-muted text-sm mb-2">
+              Type <span className="font-mono text-content-primary">delete</span> to confirm.
+            </p>
+            <input
+              type="text"
+              autoFocus
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              disabled={deleting}
+              className="w-full bg-bg-surface border border-border rounded-lg px-3 py-2 text-content-primary text-sm font-mono outline-none focus:border-danger/40 transition-colors disabled:opacity-50"
+            />
+            {deleteError && (
+              <p className="text-danger text-xs mt-2">{deleteError}</p>
+            )}
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => setConfirmDelete(false)}
+                disabled={deleting}
+                className="flex-1 py-2 rounded-lg border border-border text-content-secondary text-sm hover:bg-bg-surface transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAccount}
+                disabled={deleting || deleteConfirmText !== 'delete'}
+                className="flex-1 py-2 rounded-lg bg-danger text-bg-base font-medium text-sm hover:bg-danger/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {deleting ? 'Deleting…' : 'Delete forever'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }
