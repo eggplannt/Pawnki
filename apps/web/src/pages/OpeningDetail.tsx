@@ -12,6 +12,7 @@ import {
   findTransposition, findIntraOpeningTransposition,
   linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical, getTranspositionTargets, getFirstChildId, positionKey,
   importPgnToOpening,
+  treeToPgn,
   IntraLinkConflict,
   type ImportProgress,
   type CrossTranspositionMatch,
@@ -23,7 +24,7 @@ import {
   augmentLearnedWithTranspositions,
   type Opening,
   type Node,
-} from '@pawntree/shared';
+} from '@pawnki/shared';
 import { useColorTheme } from '@/hooks/useColorTheme';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -261,6 +262,8 @@ export default function OpeningDetail() {
   const [showTransPanel, setShowTransPanel] = useState(false);
 
   const [showPgnImport, setShowPgnImport] = useState(false);
+  const [showPgnExport, setShowPgnExport] = useState(false);
+  const [exportCopied, setExportCopied] = useState(false);
   const [pgnText, setPgnText] = useState('');
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -979,6 +982,22 @@ export default function OpeningDetail() {
               >
                 Practice
               </button>
+              <button
+                disabled
+                title="Master-game frequencies for this position — coming soon"
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-bg-elevated text-content-muted cursor-not-allowed inline-flex items-center gap-1"
+              >
+                Database
+                <span className="text-[0.6rem] uppercase tracking-wider opacity-60">soon</span>
+              </button>
+              <button
+                disabled
+                title="Engine evaluation and best-move hints — coming soon"
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-bg-elevated text-content-muted cursor-not-allowed inline-flex items-center gap-1"
+              >
+                Analysis
+                <span className="text-[0.6rem] uppercase tracking-wider opacity-60">soon</span>
+              </button>
             </div>
           </div>
 
@@ -1080,13 +1099,23 @@ export default function OpeningDetail() {
                 <span className="ml-1 px-1 rounded bg-accent/20 text-accent text-[0.65rem] align-middle">{linkEntries.length}</span>
               )}
             </button>
-            <button
-              onClick={() => { setShowPgnImport(true); setImportError(null); setPgnText(''); setImportProgress(null); }}
-              className="ml-auto text-xs text-accent hover:text-accent-hover transition-colors"
-              title="Import/Merge PGN"
-            >
-              Import/Merge PGN
-            </button>
+            <div className="ml-auto flex items-center gap-3">
+              <button
+                onClick={() => { setShowPgnExport(true); setExportCopied(false); }}
+                disabled={!tree}
+                className="text-xs text-accent hover:text-accent-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Export PGN"
+              >
+                Export PGN
+              </button>
+              <button
+                onClick={() => { setShowPgnImport(true); setImportError(null); setPgnText(''); setImportProgress(null); }}
+                className="text-xs text-accent hover:text-accent-hover transition-colors"
+                title="Import/Merge PGN"
+              >
+                Import/Merge PGN
+              </button>
+            </div>
           </div>
           {showTransPanel ? (
             <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 min-h-0">
@@ -1623,9 +1652,30 @@ export default function OpeningDetail() {
       {showPgnImport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => !importProgress && setShowPgnImport(false)}>
           <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-lg w-full mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-content-primary font-semibold mb-3">Import/Merge PGN</h3>
+            <div className="flex items-baseline justify-between mb-2">
+              <h3 className="text-content-primary font-semibold">Import/Merge PGN</h3>
+              <label className="text-xs text-accent hover:underline cursor-pointer">
+                Load file…
+                <input
+                  type="file"
+                  accept=".pgn,text/plain,application/x-chess-pgn"
+                  className="hidden"
+                  disabled={!!importProgress}
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      const text = await file.text();
+                      setPgnText(text);
+                    } finally {
+                      e.target.value = '';
+                    }
+                  }}
+                />
+              </label>
+            </div>
             <p className="text-content-muted text-xs mb-2">
-              Paste PGN text below. Moves will be merged into the existing tree.
+              Paste or load PGN text. Moves will be merged into the existing tree.
             </p>
             <textarea
               value={pgnText}
@@ -1688,6 +1738,70 @@ export default function OpeningDetail() {
           </div>
         </div>
       )}
+
+      {/* ── PGN export modal ── */}
+      {showPgnExport && tree && opening && (() => {
+        const pgn = treeToPgn(tree, {
+          event: opening.name,
+          white: opening.color === 'white' ? 'You' : '?',
+          black: opening.color === 'black' ? 'You' : '?',
+        });
+        const handleCopy = async () => {
+          try {
+            await navigator.clipboard.writeText(pgn);
+            setExportCopied(true);
+            setTimeout(() => setExportCopied(false), 1500);
+          } catch {/* no-op */}
+        };
+        const handleDownload = () => {
+          const safe = opening.name.replace(/[^\w.-]+/g, '_') || 'opening';
+          const blob = new Blob([pgn], { type: 'application/x-chess-pgn' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${safe}.pgn`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        };
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowPgnExport(false)}>
+            <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-lg w-full mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-content-primary font-semibold mb-2">Export PGN</h3>
+              <p className="text-content-muted text-xs mb-2">
+                Variations and annotations are preserved. Transposition links are emitted as normal moves.
+              </p>
+              <textarea
+                readOnly
+                value={pgn}
+                onFocus={(e) => e.currentTarget.select()}
+                className="w-full h-48 bg-bg-surface border border-border rounded-lg px-3 py-2 text-content-primary text-xs font-mono resize-none outline-none focus:border-accent/40 transition-colors"
+              />
+              <div className="flex gap-2 mt-4">
+                <button
+                  onClick={() => setShowPgnExport(false)}
+                  className="flex-1 py-2 rounded-lg border border-border text-content-secondary text-sm hover:bg-bg-surface transition-colors"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={handleCopy}
+                  className="flex-1 py-2 rounded-lg border border-border text-content-secondary text-sm hover:bg-bg-surface transition-colors"
+                >
+                  {exportCopied ? 'Copied' : 'Copy'}
+                </button>
+                <button
+                  onClick={handleDownload}
+                  className="flex-1 py-2 rounded-lg bg-accent text-bg-base font-medium text-sm hover:bg-accent-hover transition-colors"
+                >
+                  Download .pgn
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </AppShell>
   );
 }

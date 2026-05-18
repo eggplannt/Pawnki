@@ -1,4 +1,4 @@
-// Native deep link: pawntree://auth/callback?code=<pkce-code>
+// Native deep link: pawnki://auth/callback?code=<pkce-code>
 // openAuthSessionAsync in useAuth captures the redirect and calls
 // supabase.auth.exchangeCodeForSession() before this screen renders.
 // This screen only appears briefly and shows a spinner.

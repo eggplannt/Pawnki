@@ -1,1 +1,1 @@
-export { PawnTreeIcon, PawnTreeLogo } from '@pawntree/shared';
+export { PawnkiIcon, PawnkiLogo } from '@pawnki/shared';

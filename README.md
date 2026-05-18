@@ -1,4 +1,4 @@
-# Pawntree
+# Pawnki
 
 > **Status: Alpha.** Core features work end-to-end on the web app, but the data model, UI, and APIs are all subject to change. Self-hosting is possible but not yet polished. Don't rely on this for a serious repertoire yet — back up your PGNs.
 
@@ -25,12 +25,18 @@ Licensed under **Apache 2.0**.
 - Daily review: SM-2 spaced repetition with quality grades (Missed / Hard / Good / Easy)
 - Streak tracking
 - Light / dark / system themes; 3 board palettes (Wood / Slate / Green); review-order preference
+- PGN file import + export (paste text, load a `.pgn` file, copy or download/share)
 
-### What's missing
+### Coming soon
 
-- Hosting story (web deployment + Supabase project provisioning docs)
-- Engine analysis, opening explorer, custom piece sets — not planned for v1
-- Offline mode, Anki export — not planned for v1
+- **Opening database** — browse master-game frequencies for the position you're studying
+- **Computer analysis** — Stockfish (WASM on web, native on Android) for evaluation + best-move hints in the tree builder and review
+
+### Not planned for v1
+
+- Hosting story (web deployment + Supabase project provisioning docs are still TBD)
+- Custom piece sets
+- Offline mode, Anki export
 - iOS build
 
 ---
@@ -60,8 +66,8 @@ Licensed under **Apache 2.0**.
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/eggplannt/Pawntree.git
-cd Pawntree
+git clone https://github.com/eggplannt/Pawnki.git
+cd Pawnki
 bun install
 ```
 
@@ -136,7 +142,7 @@ cd apps/expo && bun run android
 
 ## Android APK
 
-Releases for Android ship as **experimental APKs on the [GitHub Releases page](https://github.com/eggplannt/Pawntree/releases)**, not to the Play Store. Expect rough edges. No automatic updates — re-install when you want the latest.
+Releases for Android ship as **experimental APKs on the [GitHub Releases page](https://github.com/eggplannt/Pawnki/releases)**, not to the Play Store. Expect rough edges. No automatic updates — re-install when you want the latest.
 
 ---
 

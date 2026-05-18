@@ -14,15 +14,15 @@ import {
   DEFAULT_BOARD_PALETTE,
   type ColorTheme,
   type BoardPaletteKey,
-} from '@pawntree/shared';
+} from '@pawnki/shared';
 
 export type { ColorTheme, BoardPaletteKey };
 
 type SchemeMode = 'light' | 'dark';
 export type ThemePref = 'light' | 'dark' | 'system';
 
-const STORAGE_KEY = 'pawntree-theme-pref';
-const BOARD_STORAGE_KEY = 'pawntree-board-theme';
+const STORAGE_KEY = 'pawnki-theme-pref';
+const BOARD_STORAGE_KEY = 'pawnki-board-theme';
 
 function buildVars(palette: typeof palettes.dark) {
   return vars({

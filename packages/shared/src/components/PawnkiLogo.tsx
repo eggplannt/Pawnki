@@ -1,4 +1,4 @@
-interface PawnTreeIconProps {
+interface PawnkiIconProps {
   size?: number;
   className?: string;
   accentColor?: string;
@@ -6,7 +6,7 @@ interface PawnTreeIconProps {
   goldColor?: string;
 }
 
-export function PawnTreeIcon({ size = 24, className = '' }: PawnTreeIconProps) {
+export function PawnkiIcon({ size = 24, className = '' }: PawnkiIconProps) {
   return (
     <svg
       width={size}
@@ -27,21 +27,21 @@ export function PawnTreeIcon({ size = 24, className = '' }: PawnTreeIconProps) {
   );
 }
 
-interface PawnTreeLogoProps {
+interface PawnkiLogoProps {
   size?: 'sm' | 'md' | 'lg' | 'xl';
   accentColor?: string;
   accentDimColor?: string;
   goldColor?: string;
 }
 
-export function PawnTreeLogo({ size = 'md' }: PawnTreeLogoProps) {
+export function PawnkiLogo({ size = 'md' }: PawnkiLogoProps) {
   const iconSizes = { sm: 20, md: 28, lg: 40, xl: 56 };
   const textSizes = { sm: 'text-base', md: 'text-xl', lg: 'text-3xl', xl: 'text-5xl' };
   const gaps = { sm: 'gap-1.5', md: 'gap-2', lg: 'gap-3', xl: 'gap-4' };
 
   return (
     <div className={`flex items-center ${gaps[size]}`}>
-      <PawnTreeIcon size={iconSizes[size]} />
+      <PawnkiIcon size={iconSizes[size]} />
       <span className={`${textSizes[size]} font-bold tracking-tight`}>
         <span className="text-accent">Pawn</span>
         <span className="text-gold">tree</span>

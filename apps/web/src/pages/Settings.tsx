@@ -2,7 +2,7 @@ import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme, type ThemePref, type BoardPaletteKey } from '@/hooks/useColorTheme';
 import { useReviewOrder, type ReviewOrder } from '@/hooks/useReviewOrder';
-import { boardPalettes, BOARD_PALETTE_KEYS } from '@pawntree/shared';
+import { boardPalettes, BOARD_PALETTE_KEYS } from '@pawnki/shared';
 
 const THEME_OPTIONS: { value: ThemePref; label: string; icon: string }[] = [
   { value: 'system', label: 'System', icon: '⊙' },

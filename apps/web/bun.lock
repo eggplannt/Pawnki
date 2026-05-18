@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "pawntree-web",
+      "name": "pawnki-web",
       "dependencies": {
         "@mdi/js": "^7.4.47",
         "@mdi/react": "^1.6.1",

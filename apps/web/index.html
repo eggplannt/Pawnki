@@ -3,13 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pawntree</title>
+    <title>Pawnki</title>
     <meta name="description" content="Build your chess opening repertoire with spaced repetition." />
   </head>
   <body>
     <script>
       // Apply theme + bg color before render to prevent flash
-      (function(){var t=localStorage.getItem('pawntree-theme');if(!t)t=matchMedia('(prefers-color-scheme:light)').matches?'light':'dark';if(t==='light')document.documentElement.classList.add('light');var s=document.documentElement.style;s.backgroundColor=t==='light'?'#f6f3ed':'#020303';s.color=t==='light'?'#1a2420':'#f0ebe3'})();
+      (function(){var t=localStorage.getItem('pawnki-theme');if(!t)t=matchMedia('(prefers-color-scheme:light)').matches?'light':'dark';if(t==='light')document.documentElement.classList.add('light');var s=document.documentElement.style;s.backgroundColor=t==='light'?'#f6f3ed':'#020303';s.color=t==='light'?'#1a2420':'#f0ebe3'})();
     </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

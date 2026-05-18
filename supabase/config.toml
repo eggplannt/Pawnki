@@ -1,7 +1,7 @@
 [auth]
 enabled = true
 site_url = "env(SITE_URL)"
-additional_redirect_urls = ["env(SITE_URL)/auth/callback", "pawntree://**", "exp://**"]
+additional_redirect_urls = ["env(SITE_URL)/auth/callback", "pawnki://**", "exp://**"]
 
 [auth.external.google]
 enabled = true

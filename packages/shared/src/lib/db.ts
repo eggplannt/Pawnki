@@ -8,6 +8,6 @@ export function initDb(client: SupabaseClient<Database>) {
 }
 
 export function getDb(): SupabaseClient<Database> {
-  if (!_db) throw new Error('[pawntree/shared] Call initDb() before using DB functions');
+  if (!_db) throw new Error('[pawnki/shared] Call initDb() before using DB functions');
   return _db;
 }

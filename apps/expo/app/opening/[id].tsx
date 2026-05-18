@@ -16,12 +16,17 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
+import * as Clipboard from 'expo-clipboard';
+import * as Sharing from 'expo-sharing';
+import { File, Paths } from 'expo-file-system';
 import {
   getOpening,
   getNodes, buildTree,
   createNode, deleteSubtree, updateNodeAnnotation,
   findTransposition, findIntraOpeningTransposition,
   importPgnToOpening,
+  treeToPgn,
   linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical,
   getTranspositionTargets, getFirstChildId, positionKey,
   type ImportProgress,
@@ -35,7 +40,7 @@ import {
   augmentLearnedWithTranspositions,
   type Opening,
   type Node,
-} from '@pawntree/shared';
+} from '@pawnki/shared';
 import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chessboard, type ChessboardMove } from '@/components/Chessboard';
 import { MoveList } from '@/components/MoveList';
@@ -205,6 +210,8 @@ export default function OpeningDetailScreen() {
   const [annotationDraft, setAnnotationDraft] = useState('');
 
   const [pgnOpen, setPgnOpen] = useState(false);
+  const [pgnExportOpen, setPgnExportOpen] = useState(false);
+  const [exportCopied, setExportCopied] = useState(false);
   const [pgnText, setPgnText] = useState('');
   const [autoLinkPgn, setAutoLinkPgn] = useState(true);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
@@ -902,6 +909,22 @@ export default function OpeningDetailScreen() {
         >
           <Text className="text-accent text-xs">Import/Merge PGN</Text>
         </Pressable>
+        <Pressable
+          onPress={() => { setExportCopied(false); setPgnExportOpen(true); }}
+          disabled={!tree}
+          className="px-2 py-1 rounded-md active:bg-bg-elevated"
+          style={{ opacity: tree ? 1 : 0.4 }}
+        >
+          <Text className="text-accent text-xs">Export PGN</Text>
+        </Pressable>
+        <View className="px-2 py-1 rounded-md bg-bg-elevated flex-row items-center gap-1">
+          <Text className="text-content-muted text-xs">Database</Text>
+          <Text className="text-content-muted text-[9px] uppercase opacity-60">soon</Text>
+        </View>
+        <View className="px-2 py-1 rounded-md bg-bg-elevated flex-row items-center gap-1">
+          <Text className="text-content-muted text-xs">Analysis</Text>
+          <Text className="text-content-muted text-[9px] uppercase opacity-60">soon</Text>
+        </View>
       </View>
 
       {/* Board */}
@@ -1488,9 +1511,30 @@ export default function OpeningDetailScreen() {
           onPress={() => !importProgress && setPgnOpen(false)}
         >
           <Pressable className="bg-bg-elevated border border-border rounded-xl p-5 w-full max-w-md" onPress={() => {}}>
-            <Text className="text-content-primary font-semibold text-base mb-1">Import / Merge PGN</Text>
+            <View className="flex-row items-center justify-between mb-1">
+              <Text className="text-content-primary font-semibold text-base">Import / Merge PGN</Text>
+              <Pressable
+                onPress={async () => {
+                  try {
+                    const result = await DocumentPicker.getDocumentAsync({
+                      type: ['application/x-chess-pgn', 'text/plain', '*/*'],
+                      copyToCacheDirectory: true,
+                    });
+                    if (result.canceled || !result.assets?.[0]) return;
+                    const text = await new File(result.assets[0].uri).text();
+                    setPgnText(text);
+                  } catch (e: any) {
+                    setImportError(e?.message ?? 'Could not read file');
+                  }
+                }}
+                disabled={!!importProgress}
+                className="active:opacity-60"
+              >
+                <Text className="text-accent text-xs">Load file…</Text>
+              </Pressable>
+            </View>
             <Text className="text-content-muted text-xs mb-3">
-              Paste PGN text below. Moves will be merged into the existing tree.
+              Paste or load PGN text. Moves will be merged into the existing tree.
             </Text>
             <TextInput
               value={pgnText}
@@ -1561,6 +1605,88 @@ export default function OpeningDetailScreen() {
           </Pressable>
         </Pressable>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* PGN export modal */}
+      <Modal
+        visible={pgnExportOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPgnExportOpen(false)}
+      >
+        <Pressable
+          className="flex-1 items-center justify-center px-6"
+          style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+          onPress={() => setPgnExportOpen(false)}
+        >
+          <Pressable className="bg-bg-elevated border border-border rounded-xl p-5 w-full max-w-md" onPress={() => {}}>
+            {(() => {
+              if (!tree) return null;
+              const pgn = treeToPgn(tree, {
+                event: opening.name,
+                white: opening.color === 'white' ? 'You' : '?',
+                black: opening.color === 'black' ? 'You' : '?',
+              });
+              const safeName = (opening.name || 'opening').replace(/[^\w.-]+/g, '_');
+              const handleCopy = async () => {
+                await Clipboard.setStringAsync(pgn);
+                setExportCopied(true);
+                setTimeout(() => setExportCopied(false), 1500);
+              };
+              const handleShare = async () => {
+                try {
+                  const file = new File(Paths.cache, `${safeName}.pgn`);
+                  if (file.exists) file.delete();
+                  file.create();
+                  file.write(pgn);
+                  if (await Sharing.isAvailableAsync()) {
+                    await Sharing.shareAsync(file.uri, {
+                      mimeType: 'application/x-chess-pgn',
+                      dialogTitle: 'Export PGN',
+                      UTI: 'public.chess-pgn',
+                    });
+                  }
+                } catch {/* swallow user-cancelled share */}
+              };
+              return (
+                <>
+                  <Text className="text-content-primary font-semibold text-base mb-1">Export PGN</Text>
+                  <Text className="text-content-muted text-xs mb-3">
+                    Variations and annotations are preserved. Transposition links are emitted as normal moves.
+                  </Text>
+                  <ScrollView
+                    className="bg-bg-surface border border-border rounded-lg px-3 py-2"
+                    style={{ maxHeight: 200 }}
+                  >
+                    <Text className="text-content-primary text-xs" style={{ fontFamily: 'monospace' }}>
+                      {pgn}
+                    </Text>
+                  </ScrollView>
+                  <View className="flex-row gap-2 mt-4">
+                    <Pressable
+                      onPress={() => setPgnExportOpen(false)}
+                      className="flex-1 py-2 rounded-lg border border-border items-center"
+                    >
+                      <Text className="text-content-secondary text-sm">Close</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={handleCopy}
+                      className="flex-1 py-2 rounded-lg border border-border items-center"
+                    >
+                      <Text className="text-content-secondary text-sm">{exportCopied ? 'Copied' : 'Copy'}</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={handleShare}
+                      className="flex-1 py-2 rounded-lg bg-accent items-center"
+                    >
+                      <Text className="text-bg-base font-medium text-sm">Share</Text>
+                    </Pressable>
+                  </View>
+                </>
+              );
+            })()}
+          </Pressable>
+        </Pressable>
       </Modal>
     </SafeAreaView>
   );

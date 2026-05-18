@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import Icon from '@mdi/react';
 import { mdiChessKing, mdiDelete } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
-import { listOpenings, deleteOpening, getLearnableCountsByOpening, getLearnedCountsByOpening, type Opening } from '@pawntree/shared';
+import { listOpenings, deleteOpening, getLearnableCountsByOpening, getLearnedCountsByOpening, type Opening } from '@pawnki/shared';
 
 type Tab = 'white' | 'black';
 type OpeningWithStats = Opening & {
@@ -196,7 +196,7 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
 
 // ── Create Opening Modal ────────────────────────────────────────────────────
 
-import { createOpening, type ImportProgress } from '@pawntree/shared';
+import { createOpening, type ImportProgress } from '@pawnki/shared';
 
 function CreateOpeningModal({
   defaultColor,
@@ -328,13 +328,34 @@ function CreateOpeningModal({
 
               {/* PGN */}
               <div>
-                <label className="block text-content-secondary text-sm mb-1">
-                  PGN <span className="text-content-muted">(optional — import moves)</span>
-                </label>
+                <div className="flex items-baseline justify-between mb-1">
+                  <label className="block text-content-secondary text-sm">
+                    PGN <span className="text-content-muted">(optional — import moves)</span>
+                  </label>
+                  <label className="text-xs text-accent hover:underline cursor-pointer">
+                    Load file…
+                    <input
+                      type="file"
+                      accept=".pgn,text/plain,application/x-chess-pgn"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try {
+                          const text = await file.text();
+                          setPgn(text);
+                        } finally {
+                          // Allow picking the same file again later.
+                          e.target.value = '';
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
                 <textarea
                   value={pgn}
                   onChange={(e) => setPgn(e.target.value)}
-                  placeholder={"Paste one or multiple games.\nShared opening moves are auto-merged."}
+                  placeholder={"Paste or load one or multiple games.\nShared opening moves are auto-merged."}
                   rows={5}
                   className="w-full bg-bg-elevated border border-border rounded-xl px-3 py-2.5 text-content-primary text-sm placeholder:text-content-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 resize-none font-mono"
                 />

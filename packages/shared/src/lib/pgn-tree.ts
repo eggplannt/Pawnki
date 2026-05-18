@@ -324,3 +324,99 @@ export function flattenTree(root: PgnNode): FlatNode[] {
   walk(root, null);
   return result;
 }
+
+// ── Tree → PGN serializer ──────────────────────────────────────────────────
+
+/** Minimal subset of `Node` needed to serialize a tree. */
+export interface TreeForPgn {
+  move_san: string | null;
+  fen: string;
+  annotation: string | null;
+  children?: TreeForPgn[];
+}
+
+export interface PgnHeader {
+  event?: string;
+  white?: string;
+  black?: string;
+  /** Free-form name used as Event when no event is provided. */
+  name?: string;
+}
+
+/**
+ * Convert a node tree into a PGN string. First child is the main line;
+ * remaining children become variations in parens. Annotations become `{...}`
+ * comments. Round-trips through `parsePgn` (modulo whitespace + comment
+ * placement nuances).
+ */
+export function treeToPgn(root: TreeForPgn, header?: PgnHeader): string {
+  const headerText = formatHeader(header);
+  const body = serializeChildren(root, /* forceNum */ true);
+  return `${headerText}${body ? body + ' ' : ''}*\n`;
+}
+
+function formatHeader(header?: PgnHeader): string {
+  const event = header?.event ?? header?.name ?? 'Pawnki opening';
+  const white = header?.white ?? '?';
+  const black = header?.black ?? '?';
+  // Escape any inner double-quotes so the tag stays well-formed.
+  const esc = (s: string) => s.replace(/"/g, '\\"');
+  return [
+    `[Event "${esc(event)}"]`,
+    `[White "${esc(white)}"]`,
+    `[Black "${esc(black)}"]`,
+    `[Result "*"]`,
+    '',
+    '',
+  ].join('\n');
+}
+
+function serializeChildren(parent: TreeForPgn, forceNum: boolean): string {
+  const children = parent.children ?? [];
+  if (children.length === 0) return '';
+
+  const [main, ...variations] = children;
+  const parts: string[] = [];
+
+  if (main.move_san) {
+    parts.push(moveNumberPrefix(parent.fen, forceNum) + main.move_san);
+  }
+  if (main.annotation) {
+    parts.push(`{${escapeComment(main.annotation)}}`);
+  }
+
+  // Each variation branches from `parent`, so it uses the same move number /
+  // side-to-move prefix as the main move did.
+  for (const v of variations) {
+    if (!v.move_san) continue;
+    let vText = `(${moveNumberPrefix(parent.fen, true)}${v.move_san}`;
+    if (v.annotation) vText += ` {${escapeComment(v.annotation)}}`;
+    const sub = serializeChildren(v, /* forceNum */ false);
+    if (sub) vText += ` ${sub}`;
+    vText += ')';
+    parts.push(vText);
+  }
+
+  // Continue main line. Force a move number after a variation or comment so
+  // the side-to-move stays unambiguous.
+  const forceAfter = variations.length > 0 || !!main.annotation;
+  const rest = serializeChildren(main, forceAfter);
+  if (rest) parts.push(rest);
+
+  return parts.join(' ');
+}
+
+function moveNumberPrefix(parentFen: string, force: boolean): string {
+  const [, side, , , , fullMoveStr] = parentFen.split(' ');
+  const fullMove = parseInt(fullMoveStr ?? '1', 10);
+  if (side === 'w') return `${fullMove}. `;
+  // Black's move — only emit the "N..." prefix when forced (after a comment
+  // or variation), otherwise continue on the same numbered token.
+  return force ? `${fullMove}... ` : '';
+}
+
+function escapeComment(text: string): string {
+  // PGN comments can't contain raw `{` or `}`. Strip them rather than try to
+  // escape — `}` always ends the comment.
+  return text.replace(/[{}]/g, '');
+}

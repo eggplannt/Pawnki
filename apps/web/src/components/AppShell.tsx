@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme } from '@/hooks/useColorTheme';
-import { PawnTreeLogo, PawnTreeIcon } from '@/components/Logo';
+import { PawnkiLogo, PawnkiIcon } from '@/components/Logo';
 
 const NAV_ITEMS = [
   { label: 'Library',  to: '/library',  icon: '♟' },
@@ -41,7 +41,7 @@ function Sidebar() {
   return (
     <aside className="hidden lg:flex w-56 flex-col bg-bg-surface border-r border-border py-6 shrink-0">
       <div className="px-5 mb-8">
-        <PawnTreeLogo size="md" />
+        <PawnkiLogo size="md" />
       </div>
 
       <nav className="flex-1 px-3 flex flex-col gap-0.5">
@@ -118,7 +118,7 @@ function MobileHeader() {
   return (
     <header className="lg:hidden h-13 bg-bg-surface border-b border-border flex items-center justify-between px-4 shrink-0">
       <div className="flex items-center gap-2">
-        <PawnTreeIcon size={20} />
+        <PawnkiIcon size={20} />
         <span className="text-lg font-bold tracking-tight">
           <span className="text-accent">Pawn</span>
           <span className="text-gold">tree</span>

@@ -20,7 +20,7 @@ import {
   type SessionSummary,
   type Node,
   type Opening,
-} from '@pawntree/shared';
+} from '@pawnki/shared';
 import { useColorTheme } from '@/hooks/useColorTheme';
 import { legalTargetStyles } from '@/lib/board-highlights';
 

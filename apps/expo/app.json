@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "Pawntree",
-    "slug": "pawntree",
+    "name": "Pawnki",
+    "slug": "pawnki",
     "version": "0.1.0",
-    "scheme": "pawntree",
+    "scheme": "pawnki",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -12,13 +12,13 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.pawntree.app"
+      "bundleIdentifier": "com.pawnki.app"
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#0f1117"
       },
-      "package": "com.pawntree.app"
+      "package": "com.pawnki.app"
     },
     "web": {
       "bundler": "metro",

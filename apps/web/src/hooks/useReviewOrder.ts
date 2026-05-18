@@ -1,9 +1,9 @@
 import { useCallback, useState } from 'react';
-import { DEFAULT_REVIEW_ORDER, REVIEW_ORDERS, type ReviewOrder } from '@pawntree/shared';
+import { DEFAULT_REVIEW_ORDER, REVIEW_ORDERS, type ReviewOrder } from '@pawnki/shared';
 
 export type { ReviewOrder };
 
-const STORAGE_KEY = 'pawntree-review-order';
+const STORAGE_KEY = 'pawnki-review-order';
 
 function getInitial(): ReviewOrder {
   const stored = localStorage.getItem(STORAGE_KEY);

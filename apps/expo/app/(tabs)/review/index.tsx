@@ -26,7 +26,7 @@ import {
   applySm2,
   intervalLabel,
   type Quality,
-} from '@pawntree/shared';
+} from '@pawnki/shared';
 import { readReviewOrder } from '@/hooks/useReviewOrder';
 
 type Stage = 'entry' | 'session' | 'done';

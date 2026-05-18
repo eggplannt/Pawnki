@@ -1,6 +1,6 @@
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme } from '@/hooks/useColorTheme';
-import { PawnTreeLogo } from '@/components/Logo';
+import { PawnkiLogo } from '@/components/Logo';
 import { useState } from 'react';
 import googleIconUrl from '@/assets/google-icon.svg';
 
@@ -39,7 +39,7 @@ export default function Login() {
         {/* Left — branding */}
         <div className="max-w-md text-center md:text-left">
           <div className="flex justify-center md:justify-start mb-6">
-            <PawnTreeLogo size="xl" />
+            <PawnkiLogo size="xl" />
           </div>
           <p className="text-content-secondary text-lg md:text-xl leading-8 mb-10">
             Build your opening repertoire.{' '}

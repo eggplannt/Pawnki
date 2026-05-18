@@ -8,7 +8,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
-      '@pawntree/shared': path.resolve(__dirname, '../../packages/shared/src'),
+      '@pawnki/shared': path.resolve(__dirname, '../../packages/shared/src'),
     },
   },
   server: {

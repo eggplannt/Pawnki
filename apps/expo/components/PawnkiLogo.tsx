@@ -13,7 +13,7 @@ interface Props {
   goldColor: string;
 }
 
-export function PawnTreeLogo({ size = 'md', accentColor, goldColor }: Props) {
+export function PawnkiLogo({ size = 'md', accentColor, goldColor }: Props) {
   const iconSize = ICON_SIZES[size];
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: GAPS[size] }}>

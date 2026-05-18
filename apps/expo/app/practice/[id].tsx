@@ -30,7 +30,7 @@ import {
   type SessionSummary,
   type Node,
   type Opening,
-} from '@pawntree/shared';
+} from '@pawnki/shared';
 import { Chessboard, type ChessboardMove } from '@/components/Chessboard';
 import { useColorTheme } from '@/hooks/useColorTheme';
 

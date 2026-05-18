@@ -14,8 +14,10 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
+import { File } from 'expo-file-system';
 import { AppShell } from '@/components/AppShell';
-import { listOpenings, createOpening, deleteOpening, getLearnableCountsByOpening, type ImportProgress, getLearnedCountsByOpening, type Opening } from '@pawntree/shared';
+import { listOpenings, createOpening, deleteOpening, getLearnableCountsByOpening, type ImportProgress, getLearnedCountsByOpening, type Opening } from '@pawnki/shared';
 import { useColorTheme } from '@/hooks/useColorTheme';
 
 type Tab = 'white' | 'black';
@@ -384,14 +386,34 @@ function CreateOpeningModal({
 
                 {/* PGN */}
                 <View>
-                  <Text className="text-content-secondary text-sm mb-1">
-                    PGN{' '}
-                    <Text className="text-content-muted">(optional)</Text>
-                  </Text>
+                  <View className="flex-row items-baseline justify-between mb-1">
+                    <Text className="text-content-secondary text-sm">
+                      PGN{' '}
+                      <Text className="text-content-muted">(optional)</Text>
+                    </Text>
+                    <Pressable
+                      onPress={async () => {
+                        try {
+                          const result = await DocumentPicker.getDocumentAsync({
+                            type: ['application/x-chess-pgn', 'text/plain', '*/*'],
+                            copyToCacheDirectory: true,
+                          });
+                          if (result.canceled || !result.assets?.[0]) return;
+                          const text = await new File(result.assets[0].uri).text();
+                          setPgn(text);
+                        } catch (e: any) {
+                          setError(e?.message ?? 'Could not read file');
+                        }
+                      }}
+                      className="active:opacity-60"
+                    >
+                      <Text className="text-accent text-xs">Load file…</Text>
+                    </Pressable>
+                  </View>
                   <TextInput
                     value={pgn}
                     onChangeText={setPgn}
-                    placeholder={"Paste one or multiple games."}
+                    placeholder={"Paste or load one or multiple games."}
                     placeholderTextColor={colorTheme.content.muted}
                     multiline
                     numberOfLines={5}

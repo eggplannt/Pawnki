@@ -6,15 +6,15 @@ import {
   DEFAULT_BOARD_PALETTE,
   type ColorTheme,
   type BoardPaletteKey,
-} from '@pawntree/shared';
+} from '@pawnki/shared';
 
 export type { ColorTheme, BoardPaletteKey };
 
 export type ThemePref = 'light' | 'dark' | 'system';
 type Theme = 'light' | 'dark';
 
-const STORAGE_KEY = 'pawntree-theme';
-const BOARD_STORAGE_KEY = 'pawntree-board-theme';
+const STORAGE_KEY = 'pawnki-theme';
+const BOARD_STORAGE_KEY = 'pawnki-board-theme';
 
 function getInitialBoard(): BoardPaletteKey {
   const stored = localStorage.getItem(BOARD_STORAGE_KEY);

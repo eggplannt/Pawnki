@@ -6,7 +6,7 @@ import {
   FlatList,
   type ListRenderItemInfo,
 } from 'react-native';
-import type { Node } from '@pawntree/shared';
+import type { Node } from '@pawnki/shared';
 import { useColorTheme } from '@/hooks/useColorTheme';
 
 // ── FEN helpers ──────────────────────────────────────────────────────────

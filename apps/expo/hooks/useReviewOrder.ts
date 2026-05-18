@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { DEFAULT_REVIEW_ORDER, REVIEW_ORDERS, type ReviewOrder } from '@pawntree/shared';
+import { DEFAULT_REVIEW_ORDER, REVIEW_ORDERS, type ReviewOrder } from '@pawnki/shared';
 
 export type { ReviewOrder };
 
-const STORAGE_KEY = 'pawntree-review-order';
+const STORAGE_KEY = 'pawnki-review-order';
 
 export function useReviewOrder(): [ReviewOrder, (o: ReviewOrder) => void] {
   const [order, setOrderState] = useState<ReviewOrder>(DEFAULT_REVIEW_ORDER);

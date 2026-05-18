@@ -18,7 +18,7 @@ import {
   applySm2,
   intervalLabel,
   type Quality,
-} from '@pawntree/shared';
+} from '@pawnki/shared';
 import { readReviewOrder } from '@/hooks/useReviewOrder';
 // gradeReview is used by the parent Review component below.
 

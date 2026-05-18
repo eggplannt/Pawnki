@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme } from '@/hooks/useColorTheme';
-import { PawnTreeLogo } from '@/components/PawnTreeLogo';
+import { PawnkiLogo } from '@/components/PawnkiLogo';
 
 export default function LoginScreen() {
   const { colors: colorTheme } = useColorTheme();
@@ -24,7 +24,7 @@ export default function LoginScreen() {
       <View style={{ width: '100%', maxWidth: 380 }}>
         {/* Logo */}
         <View className="mb-3">
-          <PawnTreeLogo
+          <PawnkiLogo
             size="lg"
             accentColor={colorTheme.accent.default}
             goldColor={colorTheme.gold.default}
