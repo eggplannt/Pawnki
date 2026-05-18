@@ -5,5 +5,6 @@ export * from './lib/sm2';
 export * from './lib/practice';
 export * from './lib/reviews';
 export * from './lib/openings';
+export * from './lib/streaks';
 export { initDb } from './lib/db';
 export { PawnTreeIcon, PawnTreeLogo } from './components/PawnTreeLogo';

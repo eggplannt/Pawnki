@@ -126,18 +126,27 @@ export type Database = {
       profiles: {
         Row: {
           created_at: string
+          current_streak: number
           display_name: string | null
           id: string
+          last_review_date: string | null
+          longest_streak: number
         }
         Insert: {
           created_at?: string
+          current_streak?: number
           display_name?: string | null
           id: string
+          last_review_date?: string | null
+          longest_streak?: number
         }
         Update: {
           created_at?: string
+          current_streak?: number
           display_name?: string | null
           id?: string
+          last_review_date?: string | null
+          longest_streak?: number
         }
         Relationships: []
       }

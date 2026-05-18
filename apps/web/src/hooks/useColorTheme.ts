@@ -1,12 +1,26 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { palettes, hexToRgbChannels, type ColorTheme } from '@pawntree/shared';
+import {
+  palettes,
+  hexToRgbChannels,
+  boardPalettes,
+  DEFAULT_BOARD_PALETTE,
+  type ColorTheme,
+  type BoardPaletteKey,
+} from '@pawntree/shared';
 
-export type { ColorTheme };
+export type { ColorTheme, BoardPaletteKey };
 
 export type ThemePref = 'light' | 'dark' | 'system';
 type Theme = 'light' | 'dark';
 
 const STORAGE_KEY = 'pawntree-theme';
+const BOARD_STORAGE_KEY = 'pawntree-board-theme';
+
+function getInitialBoard(): BoardPaletteKey {
+  const stored = localStorage.getItem(BOARD_STORAGE_KEY);
+  if (stored && stored in boardPalettes) return stored as BoardPaletteKey;
+  return DEFAULT_BOARD_PALETTE;
+}
 
 function getSystemScheme(): Theme {
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
@@ -39,7 +53,7 @@ function applyPalette(palette: Record<string, unknown>) {
   }
 }
 
-function applyTheme(theme: Theme) {
+function applyTheme(theme: Theme, board: BoardPaletteKey) {
   const root = document.documentElement;
   if (theme === 'light') {
     root.classList.add('light');
@@ -47,6 +61,9 @@ function applyTheme(theme: Theme) {
     root.classList.remove('light');
   }
   applyPalette(palettes[theme] as unknown as Record<string, unknown>);
+  // Board palette overrides whatever the theme provided.
+  const b = boardPalettes[board];
+  applyPalette({ board: { dark: b.dark, light: b.light } });
 }
 
 function cssVar(name: string): string {
@@ -94,6 +111,8 @@ interface ThemeContextValue {
   setPref: (p: ThemePref) => void;
   toggleTheme: () => void;
   colors: ColorTheme;
+  boardPref: BoardPaletteKey;
+  setBoardPref: (p: BoardPaletteKey) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -101,9 +120,13 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 export { ThemeContext };
 
 export function useThemeProvider() {
+  const [boardPref, setBoardPrefState] = useState<BoardPaletteKey>(() => {
+    const b = getInitialBoard();
+    return b;
+  });
   const [pref, setPrefState] = useState<ThemePref>(() => {
     const p = getInitialPref();
-    applyTheme(p === 'system' ? getSystemScheme() : p);
+    applyTheme(p === 'system' ? getSystemScheme() : p, getInitialBoard());
     return p;
   });
   const [systemScheme, setSystemScheme] = useState<Theme>(getSystemScheme);
@@ -120,20 +143,25 @@ export function useThemeProvider() {
   const theme: Theme = pref === 'system' ? systemScheme : pref;
 
   useEffect(() => {
-    applyTheme(theme);
+    applyTheme(theme, boardPref);
     requestAnimationFrame(() => setColors(getColorValues()));
-  }, [theme]);
+  }, [theme, boardPref]);
 
   const setPref = useCallback((p: ThemePref) => {
     setPrefState(p);
     localStorage.setItem(STORAGE_KEY, p);
   }, []);
 
+  const setBoardPref = useCallback((b: BoardPaletteKey) => {
+    setBoardPrefState(b);
+    localStorage.setItem(BOARD_STORAGE_KEY, b);
+  }, []);
+
   const toggleTheme = useCallback(() => {
     setPref(theme === 'dark' ? 'light' : 'dark');
   }, [theme, setPref]);
 
-  return { theme, pref, setPref, toggleTheme, colors };
+  return { theme, pref, setPref, toggleTheme, colors, boardPref, setBoardPref };
 }
 
 export function useColorTheme(): ThemeContextValue {

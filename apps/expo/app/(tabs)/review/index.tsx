@@ -19,12 +19,15 @@ import {
   getDueReviews,
   gradeReview,
   getReviewStats,
+  getStreak,
   type ReviewItem,
   type ReviewStats,
+  type Streak,
   applySm2,
   intervalLabel,
   type Quality,
 } from '@pawntree/shared';
+import { readReviewOrder } from '@/hooks/useReviewOrder';
 
 type Stage = 'entry' | 'session' | 'done';
 type AttemptState =
@@ -60,6 +63,7 @@ export default function ReviewScreen() {
   const [idx, setIdx] = useState(0);
   const [originalTotal, setOriginalTotal] = useState(0);
   const [stats, setStats] = useState<ReviewStats | null>(null);
+  const [streak, setStreak] = useState<Streak | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionResults, setSessionResults] = useState<GradeResult[]>([]);
@@ -78,8 +82,12 @@ export default function ReviewScreen() {
     setLoading(true);
     setError(null);
     try {
-      const s = await getReviewStats();
+      const [s, st] = await Promise.all([
+        getReviewStats(),
+        getStreak().catch(() => null),
+      ]);
       setStats(s);
+      setStreak(st);
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load review stats');
     } finally {
@@ -91,7 +99,7 @@ export default function ReviewScreen() {
     setLoading(true);
     setError(null);
     try {
-      const due = await getDueReviews();
+      const due = await getDueReviews(await readReviewOrder());
       if (due.length === 0) { await loadEntry(); return; }
       setItems(due);
       setIdx(0);
@@ -155,26 +163,48 @@ export default function ReviewScreen() {
   }
 
   if (stage === 'done') {
-    return <DoneScreen results={sessionResults} originalTotal={originalTotal} onBack={() => setStage('entry')} />;
+    return <DoneScreen results={sessionResults} originalTotal={originalTotal} streak={streak} onBack={() => setStage('entry')} />;
   }
 
-  return <EntryScreen stats={stats} error={error} onStart={startSession} />;
+  return <EntryScreen stats={stats} streak={streak} error={error} onStart={startSession} />;
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────
 
 function EntryScreen({
-  stats, error, onStart,
-}: { stats: ReviewStats | null; error: string | null; onStart: () => void }) {
+  stats, streak, error, onStart,
+}: { stats: ReviewStats | null; streak: Streak | null; error: string | null; onStart: () => void }) {
   const router = useRouter();
   const { colors: colorTheme } = useColorTheme();
   const hasDue = (stats?.dueToday ?? 0) > 0;
   return (
     <AppShell>
       <ScrollView contentContainerStyle={{ padding: 20 }}>
-        <View className="flex-row items-center gap-2 mb-1">
+        <View className="flex-row items-center gap-2 mb-1 flex-wrap">
           <MaterialCommunityIcons name="sword-cross" size={22} color={colorTheme.gold.default} />
           <Text className="text-content-primary text-2xl font-semibold">Daily Review</Text>
+          {streak && streak.current > 0 && (
+            <View
+              className={`flex-row items-center gap-1 px-2 py-0.5 rounded-md border ${
+                streak.atRisk
+                  ? 'bg-gold/15 border-gold/30'
+                  : 'bg-accent/15 border-accent/30'
+              }`}
+            >
+              <MaterialCommunityIcons
+                name="fire"
+                size={12}
+                color={streak.atRisk ? colorTheme.gold.default : colorTheme.accent.default}
+              />
+              <Text
+                className="text-xs font-medium"
+                style={{ color: streak.atRisk ? colorTheme.gold.default : colorTheme.accent.default }}
+              >
+                {streak.current} {streak.current === 1 ? 'day' : 'days'}
+                {streak.atRisk ? ' · at risk' : ''}
+              </Text>
+            </View>
+          )}
         </View>
         <Text className="text-content-muted text-sm mb-6">
           Spaced repetition over the positions you've learned.
@@ -504,8 +534,8 @@ function ReviewSession({
 // ── Done ──────────────────────────────────────────────────────────────────
 
 function DoneScreen({
-  results, originalTotal, onBack,
-}: { results: GradeResult[]; originalTotal: number; onBack: () => void }) {
+  results, originalTotal, streak, onBack,
+}: { results: GradeResult[]; originalTotal: number; streak: Streak | null; onBack: () => void }) {
   const seen = new Set<string>();
   let firstTry = 0;
   for (const r of results) {
@@ -514,12 +544,18 @@ function DoneScreen({
     if (isFirst && !r.requeued && r.wrongCount === 0) firstTry += 1;
   }
   const requeues = results.filter((r) => r.requeued).length;
+  const streakValue = streak?.current ?? 0;
   return (
     <AppShell>
       <ScrollView contentContainerStyle={{ padding: 20 }}>
         <Text className="text-content-primary text-2xl font-semibold mb-1">Review complete</Text>
         <Text className="text-content-muted text-sm mb-6">
           {originalTotal} {originalTotal === 1 ? 'position' : 'positions'} reviewed.
+          {streakValue > 0 && (
+            <Text className="text-accent font-medium">
+              {' '}{streakValue}-day streak {streakValue === 1 ? 'started' : 'kept alive'}.
+            </Text>
+          )}
         </Text>
 
         <View className="flex-row gap-3 mb-6">

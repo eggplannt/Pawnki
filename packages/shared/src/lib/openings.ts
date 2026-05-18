@@ -326,63 +326,115 @@ export interface IntraTranspositionMatch {
 }
 
 /**
- * Find a transposition in a DIFFERENT opening. Returns the canonical
- * (unlinked) node id in the target opening so the caller can link to it.
- * Skips matches where the parent FEN also exists in the target opening —
- * that means it's a shared trunk position, not a real transposition.
+ * Find transpositions in other openings. Returns one match per opening that
+ * contains the same position via a different move-order path than the user's.
+ * The caller picks one to link to (or links to none).
+ *
+ * `userPathSans` is the user's move sequence from root to the new node
+ * (inclusive). If a candidate opening's path to the matched position is the
+ * exact same sequence, it's a literal duplicate line (a "shared trunk"
+ * extension), not a transposition — and we skip it. Pass an empty array to
+ * disable path filtering.
  */
 export async function findTransposition(
   fen: string,
-  parentFen: string,
   excludeOpeningId: string,
-): Promise<CrossTranspositionMatch | null> {
+  userPathSans: string[] = [],
+): Promise<CrossTranspositionMatch[]> {
   const key = positionKey(fen);
-  const parentKey = positionKey(parentFen);
   const db = getDb();
 
   const { data, error } = await db
     .from('nodes')
-    .select('id, opening_id, transposes_to_node_id, openings(id, name, color)')
+    .select('id, parent_id, opening_id, move_san, transposes_to_node_id, openings(id, name, color)')
     .eq('position_key', key)
     .neq('opening_id', excludeOpeningId)
-    .limit(10);
+    .limit(50);
 
-  if (error || !data || data.length === 0) return null;
+  if (error || !data || data.length === 0) return [];
 
-  for (const row of data) {
-    const otherOpeningId = row.opening_id;
-    const { data: parentMatch } = await db
+  // Resolve link nodes to their canonical targets.
+  const linkTargetIds = data
+    .map((r) => r.transposes_to_node_id)
+    .filter((v): v is string => !!v);
+  const canonicalById = new Map<string, { id: string; opening_id: string }>();
+  if (linkTargetIds.length > 0) {
+    const { data: targetRows } = await db
       .from('nodes')
-      .select('id')
-      .eq('position_key', parentKey)
-      .eq('opening_id', otherOpeningId)
-      .limit(1);
-
-    if (parentMatch && parentMatch.length > 0) continue;
-
-    const opening = (row as any).openings;
-    if (!opening) continue;
-
-    // Resolve to canonical inside that opening.
-    let canonicalId = row.id as string;
-    if (row.transposes_to_node_id) {
-      const { data: targetRow } = await db
-        .from('nodes')
-        .select('id')
-        .eq('id', row.transposes_to_node_id)
-        .single();
-      if (targetRow) canonicalId = targetRow.id;
+      .select('id, opening_id')
+      .in('id', linkTargetIds);
+    for (const t of (targetRows ?? []) as Array<{ id: string; opening_id: string }>) {
+      canonicalById.set(t.id, t);
     }
-
-    return {
-      canonicalNodeId: canonicalId,
-      openingId: opening.id,
-      openingName: opening.name,
-      openingColor: opening.color,
-    };
   }
 
-  return null;
+  // De-dupe by opening_id (keep first canonical-resolved node per opening).
+  const seenOpenings = new Set<string>();
+  const candidates: Array<{ canonicalId: string; matchNodeId: string; opening: { id: string; name: string; color: 'white' | 'black' } }> = [];
+  for (const row of data) {
+    const opening = (row as any).openings;
+    if (!opening) continue;
+    if (seenOpenings.has(opening.id)) continue;
+    seenOpenings.add(opening.id);
+    let canonicalId = row.id as string;
+    if (row.transposes_to_node_id) {
+      canonicalId = canonicalById.get(row.transposes_to_node_id)?.id ?? row.transposes_to_node_id;
+    }
+    candidates.push({ canonicalId, matchNodeId: row.id as string, opening });
+  }
+
+  if (candidates.length === 0) return [];
+
+  // If userPathSans is empty, return all candidates without path filtering.
+  if (userPathSans.length === 0) {
+    return candidates.map((c) => ({
+      canonicalNodeId: c.canonicalId,
+      openingId: c.opening.id,
+      openingName: c.opening.name,
+      openingColor: c.opening.color,
+    }));
+  }
+
+  // Path filter: drop candidates whose move sequence from root equals the
+  // user's exactly — those are shared-trunk duplicates, not transpositions.
+  const candidatePaths = await Promise.all(
+    candidates.map((c) => pathSansToRoot(c.matchNodeId)),
+  );
+  const results: CrossTranspositionMatch[] = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    const path = candidatePaths[i];
+    if (path.length === userPathSans.length && path.every((s, j) => s === userPathSans[j])) {
+      continue; // identical line — shared trunk
+    }
+    results.push({
+      canonicalNodeId: c.canonicalId,
+      openingId: c.opening.id,
+      openingName: c.opening.name,
+      openingColor: c.opening.color,
+    });
+  }
+  return results;
+}
+
+/** Walk parent_id chain back to root, returning move_san sequence (root-first, excluding the root). */
+async function pathSansToRoot(nodeId: string): Promise<string[]> {
+  const db = getDb();
+  const sans: string[] = [];
+  let cur: string | null = nodeId;
+  // Bounded loop — practical opening depths are well below 200 plies.
+  for (let i = 0; cur && i < 200; i++) {
+    const res = await db
+      .from('nodes')
+      .select('parent_id, move_san')
+      .eq('id', cur)
+      .single();
+    if (res.error || !res.data) break;
+    const row = res.data as { parent_id: string | null; move_san: string | null };
+    if (row.move_san) sans.unshift(row.move_san);
+    cur = row.parent_id ?? null;
+  }
+  return sans;
 }
 
 /**

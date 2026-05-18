@@ -1,6 +1,16 @@
 import { getDb } from './db';
 import { applySm2, addDays, todayYmd, type Quality, type CardState } from './sm2';
+import { bumpStreak } from './streaks';
 import type { Node, Opening, Review } from '../types';
+
+// Review session ordering preference.
+// - due-first: oldest due date first (default; mirrors Anki).
+// - random:    fully shuffled.
+// - interleave: shuffle by opening so the same opening's positions don't all
+//   cluster together — keeps the session varied without losing due-priority.
+export type ReviewOrder = 'due-first' | 'random' | 'interleave';
+export const DEFAULT_REVIEW_ORDER: ReviewOrder = 'due-first';
+export const REVIEW_ORDERS: ReviewOrder[] = ['due-first', 'random', 'interleave'];
 
 // Note: the underlying table is named `review_cards` (legacy from initial
 // schema). In code/UI we treat each row as a "review" of a position — not a
@@ -95,7 +105,7 @@ export interface ReviewItem {
  * node, and opening info. Reviews whose node has no parent (the opening root)
  * are skipped — there's no position to quiz from.
  */
-export async function getDueReviews(): Promise<ReviewItem[]> {
+export async function getDueReviews(order: ReviewOrder = DEFAULT_REVIEW_ORDER): Promise<ReviewItem[]> {
   const today = todayYmd();
   // Due iff: scheduled on/before today, OR never reviewed yet (a freshly-
   // learned position with no first review must always surface, regardless of
@@ -157,6 +167,42 @@ export async function getDueReviews(): Promise<ReviewItem[]> {
       ),
     });
   }
+
+  if (order === 'random') {
+    return shuffle(out);
+  }
+  if (order === 'interleave') {
+    return interleaveByOpening(out);
+  }
+  return out;
+}
+
+function shuffle<T>(arr: T[]): T[] {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/** Round-robin items across openings so the same opening doesn't streak. */
+function interleaveByOpening(items: ReviewItem[]): ReviewItem[] {
+  const buckets = new Map<string, ReviewItem[]>();
+  for (const it of items) {
+    const k = it.opening.id;
+    const arr = buckets.get(k) ?? [];
+    arr.push(it);
+    buckets.set(k, arr);
+  }
+  const queues = Array.from(buckets.values());
+  const out: ReviewItem[] = [];
+  while (queues.some((q) => q.length > 0)) {
+    for (const q of queues) {
+      const next = q.shift();
+      if (next) out.push(next);
+    }
+  }
   return out;
 }
 
@@ -185,6 +231,8 @@ export async function gradeReview(
     })
     .eq('id', review.id);
   if (error) throw error;
+  // Best-effort streak bump — don't fail the grade if this errors.
+  try { await bumpStreak(); } catch { /* ignore */ }
   return { next, dueDate };
 }
 

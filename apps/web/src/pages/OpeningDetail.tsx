@@ -251,7 +251,7 @@ export default function OpeningDetail() {
   const [transChoice, setTransChoice] = useState<{
     newNodeId: string;
     intra: IntraTranspositionMatch | null;
-    cross: CrossTranspositionMatch | null;
+    cross: CrossTranspositionMatch[];
     isReprompt: boolean;
   } | null>(null);
   const [confirmCanonical, setConfirmCanonical] = useState(false);
@@ -600,24 +600,31 @@ export default function OpeningDetail() {
 
     setPendingFen(newFen);
 
-    const parentFen = currentNode.fen;
     const parentId = currentNode.id;
+    // Compute user's move path (root → new node) so findTransposition can
+    // distinguish real transpositions from literal shared-trunk duplicates.
+    const userPathSans = [
+      ...getPathNodes(currentNode, parentMap)
+        .map((n) => n.move_san)
+        .filter((s): s is string => !!s),
+      result.san,
+    ];
     setSaving(true);
     createNode(id, parentId, result.san, result.from + result.to + (result.promotion ?? ''), newFen)
       .then(async (newNode) => {
         await reloadTree(newNode.id);
         const [intra, cross] = await Promise.all([
           findIntraOpeningTransposition(newFen, id, newNode.id),
-          findTransposition(newFen, parentFen, id),
+          findTransposition(newFen, id, userPathSans),
         ]);
-        if (intra || cross) {
+        if (intra || cross.length > 0) {
           setTransChoice({ newNodeId: newNode.id, intra, cross, isReprompt: false });
         }
       })
       .finally(() => setSaving(false));
 
     return true;
-  }, [currentNode, id, saving]);
+  }, [currentNode, id, saving, parentMap]);
 
   const handlePieceDrop = useCallback(({ sourceSquare, targetSquare }: {
     piece: unknown;
@@ -754,11 +761,11 @@ export default function OpeningDetail() {
     }
   }, [transChoice, id, closeTransChoice]);
 
-  const handleLinkCross = useCallback(async () => {
-    if (!transChoice?.cross || !id) return;
+  const handleLinkCross = useCallback(async (canonicalNodeId: string) => {
+    if (!transChoice || !id) return;
     setSaving(true);
     try {
-      await linkNode(transChoice.newNodeId, transChoice.cross.canonicalNodeId);
+      await linkNode(transChoice.newNodeId, canonicalNodeId);
       await reloadTree(transChoice.newNodeId);
     } finally {
       setSaving(false);
@@ -837,11 +844,12 @@ export default function OpeningDetail() {
       return;
     }
 
-    const parent = parentMap.get(node.id);
-    const parentFen = parent?.fen ?? tree.fen;
+    const userPathSans = getPathNodes(node, parentMap)
+      .map((n) => n.move_san)
+      .filter((s): s is string => !!s);
     const [intra, cross] = await Promise.all([
       findIntraOpeningTransposition(node.fen, id, node.id),
-      findTransposition(node.fen, parentFen, id),
+      findTransposition(node.fen, id, userPathSans),
     ]);
     setContextMenu(null);
     setTransChoice({ newNodeId: node.id, intra, cross, isReprompt: true });
@@ -1180,7 +1188,7 @@ export default function OpeningDetail() {
           (e) => e.targetId === transChoice.intra!.canonicalNodeId && e.node.id !== transChoice.newNodeId,
         ));
 
-        if (transChoice.isReprompt && !transChoice.intra && !transChoice.cross && !isLinked) {
+        if (transChoice.isReprompt && !transChoice.intra && transChoice.cross.length === 0 && !isLinked) {
           return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={closeTransChoice}>
               <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-sm mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -1229,16 +1237,27 @@ export default function OpeningDetail() {
           );
         }
 
+        const crossList = transChoice.cross;
+        const crossNamesNode = crossList.length === 0 ? null
+          : crossList.length === 1
+            ? <span className="text-accent font-medium">{crossList[0].openingName}</span>
+            : <>{crossList.map((m, i) => (
+                <span key={m.openingId}>
+                  {i > 0 && (i === crossList.length - 1 ? ' and ' : ', ')}
+                  <span className="text-accent font-medium">{m.openingName}</span>
+                </span>
+              ))}</>;
+
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
             <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-md mx-4 shadow-2xl">
               <h3 className="text-content-primary font-semibold mb-2">{transChoice.isReprompt ? 'Transposition' : 'Transposition detected'}</h3>
               <p className="text-content-secondary text-sm mb-4">
-                {transChoice.intra && transChoice.cross
-                  ? <>This position already exists in this opening (via <span className="text-accent font-medium">{transChoice.intra.moveSan ?? '?'}</span>) and in <span className="text-accent font-medium">{transChoice.cross.openingName}</span>.</>
+                {transChoice.intra && crossList.length > 0
+                  ? <>This position already exists in this opening (via <span className="text-accent font-medium">{transChoice.intra.moveSan ?? '?'}</span>) and in {crossNamesNode}.</>
                   : transChoice.intra
                     ? <>This position can also be reached in this opening via <span className="text-accent font-medium">{transChoice.intra.moveSan ?? '?'}</span>.</>
-                    : <>This position also appears in <span className="text-accent font-medium">{transChoice.cross!.openingName}</span>.</>
+                    : <>This position also appears in {crossNamesNode}.</>
                 }
               </p>
 
@@ -1267,33 +1286,35 @@ export default function OpeningDetail() {
                     </div>
                   </button>
                 )}
-                {transChoice.cross && !transChoice.intra && (
+                {!transChoice.intra && crossList.map((m) => (
                   <button
-                    onClick={handleLinkCross}
+                    key={`link-${m.openingId}`}
+                    onClick={() => handleLinkCross(m.canonicalNodeId)}
                     disabled={saving}
                     className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
                   >
                     <div className="text-content-primary text-sm font-medium">
-                      Link to <span className="text-accent">{transChoice.cross.openingName}</span>
+                      Link to <span className="text-accent">{m.openingName}</span>
                     </div>
                     <div className="text-content-muted text-xs mt-0.5">Next moves jump into that opening's line for this position.</div>
                   </button>
-                )}
-                {transChoice.cross && !transChoice.intra && !isCrossLink && (
+                ))}
+                {!transChoice.intra && !isCrossLink && crossList.map((m) => (
                   <button
-                    onClick={() => handleAbsorbCross(transChoice.cross!.canonicalNodeId)}
+                    key={`absorb-${m.openingId}`}
+                    onClick={() => handleAbsorbCross(m.canonicalNodeId)}
                     disabled={saving}
                     className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
                   >
                     <div className="text-content-primary text-sm font-medium">
-                      Make this the canonical for all openings
+                      Absorb <span className="text-accent">{m.openingName}</span> into this opening
                     </div>
                     <div className="text-content-muted text-xs mt-0.5">
-                      <span className="text-accent">{transChoice.cross.openingName}</span> and everything linked to it will be repointed here. Its continuations are merged into this opening.
+                      <span className="text-accent">{m.openingName}</span> and everything linked to it will be repointed here. Its continuations are merged into this opening.
                     </div>
                   </button>
-                )}
-                {/* Only allow "keep as a new branching node" when there's no
+                ))}
+                {/* Only allow "Keep as local canonical" when there's no
                     same-opening duplicate. A position must have exactly one
                     branching node per opening. */}
                 {!transChoice.intra && (
@@ -1302,8 +1323,8 @@ export default function OpeningDetail() {
                     disabled={saving}
                     className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
                   >
-                    <div className="text-content-primary text-sm font-medium">Keep as a new branching node here</div>
-                    <div className="text-content-muted text-xs mt-0.5">Don't link to the other opening; keep this position only in this opening.</div>
+                    <div className="text-content-primary text-sm font-medium">Keep as local canonical</div>
+                    <div className="text-content-muted text-xs mt-0.5">Don't link to another opening; this move stays as the canonical for this opening.</div>
                   </button>
                 )}
               </div>

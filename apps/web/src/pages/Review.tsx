@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import Icon from '@mdi/react';
-import { mdiChessKing } from '@mdi/js';
+import { mdiChessKing, mdiFire } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
 import { useColorTheme } from '@/hooks/useColorTheme';
 import { legalTargetStyles } from '@/lib/board-highlights';
@@ -11,12 +11,15 @@ import {
   getDueReviews,
   gradeReview,
   getReviewStats,
+  getStreak,
   type ReviewItem,
   type ReviewStats,
+  type Streak,
   applySm2,
   intervalLabel,
   type Quality,
 } from '@pawntree/shared';
+import { readReviewOrder } from '@/hooks/useReviewOrder';
 // gradeReview is used by the parent Review component below.
 
 type Stage = 'entry' | 'session' | 'done';
@@ -58,6 +61,7 @@ export default function Review() {
   const [idx, setIdx] = useState(0);
   const [originalTotal, setOriginalTotal] = useState(0);
   const [stats, setStats] = useState<ReviewStats | null>(null);
+  const [streak, setStreak] = useState<Streak | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionResults, setSessionResults] = useState<GradeResult[]>([]);
@@ -77,8 +81,12 @@ export default function Review() {
     setLoading(true);
     setError(null);
     try {
-      const s = await getReviewStats();
+      const [s, st] = await Promise.all([
+        getReviewStats(),
+        getStreak().catch(() => null),
+      ]);
       setStats(s);
+      setStreak(st);
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load review stats');
     } finally {
@@ -90,7 +98,7 @@ export default function Review() {
     setLoading(true);
     setError(null);
     try {
-      const due = await getDueReviews();
+      const due = await getDueReviews(readReviewOrder());
       if (due.length === 0) {
         await loadEntry();
         return;
@@ -152,22 +160,39 @@ export default function Review() {
   }
 
   if (stage === 'done') {
-    return <DoneScreen results={sessionResults} originalTotal={originalTotal} onBack={() => setStage('entry')} />;
+    return <DoneScreen results={sessionResults} originalTotal={originalTotal} streak={streak} onBack={() => setStage('entry')} />;
   }
 
-  return <EntryScreen stats={stats} error={error} onStart={startSession} />;
+  return <EntryScreen stats={stats} streak={streak} error={error} onStart={startSession} />;
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────
 
 function EntryScreen({
-  stats, error, onStart,
-}: { stats: ReviewStats | null; error: string | null; onStart: () => void }) {
+  stats, streak, error, onStart,
+}: { stats: ReviewStats | null; streak: Streak | null; error: string | null; onStart: () => void }) {
   const hasDue = (stats?.dueToday ?? 0) > 0;
   return (
     <AppShell>
       <div className="flex-1 p-6 lg:p-8 max-w-2xl mx-auto w-full">
-        <h1 className="text-content-primary text-2xl font-semibold mb-1">Daily Review</h1>
+        <div className="flex items-center gap-3 mb-1">
+          <h1 className="text-content-primary text-2xl font-semibold">Daily Review</h1>
+          {streak && streak.current > 0 && (
+            <span
+              title={streak.atRisk ? 'Review today to keep your streak alive' : 'Daily review streak'}
+              className={[
+                'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border',
+                streak.atRisk
+                  ? 'bg-gold/15 text-gold border-gold/30'
+                  : 'bg-accent/15 text-accent border-accent/30',
+              ].join(' ')}
+            >
+              <Icon path={mdiFire} size={0.6} />
+              {streak.current} {streak.current === 1 ? 'day' : 'days'}
+              {streak.atRisk ? ' · at risk' : ''}
+            </span>
+          )}
+        </div>
         <p className="text-content-muted text-sm mb-6">
           Spaced repetition over the positions you've learned. Quick sessions, every day.
         </p>
@@ -607,8 +632,8 @@ function ReviewSession({
 // ── Done ──────────────────────────────────────────────────────────────────
 
 function DoneScreen({
-  results, originalTotal, onBack,
-}: { results: GradeResult[]; originalTotal: number; onBack: () => void }) {
+  results, originalTotal, streak, onBack,
+}: { results: GradeResult[]; originalTotal: number; streak: Streak | null; onBack: () => void }) {
   // First-try = the very first time we saw a position, no wrong attempts, and
   // graded Good/Easy. Requeues don't count even if the user nails them later.
   const seen = new Set<string>();
@@ -619,12 +644,21 @@ function DoneScreen({
     if (isFirst && !r.requeued && r.wrongCount === 0) firstTry += 1;
   }
   const requeues = results.filter((r) => r.requeued).length;
+  const streakValue = streak?.current ?? 0;
   return (
     <AppShell>
       <div className="flex-1 p-6 lg:p-8 max-w-2xl mx-auto w-full">
         <h1 className="text-content-primary text-2xl font-semibold mb-1">Review complete</h1>
         <p className="text-content-muted text-sm mb-6">
           {originalTotal} {originalTotal === 1 ? 'position' : 'positions'} reviewed.
+          {streakValue > 0 && (
+            <>
+              {' '}
+              <span className="text-accent font-medium">
+                {streakValue}-day streak {streakValue === 1 ? 'started' : 'kept alive'}.
+              </span>
+            </>
+          )}
         </p>
 
         <div className="grid grid-cols-3 gap-3 mb-6">

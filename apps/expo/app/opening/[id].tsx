@@ -170,7 +170,7 @@ type TransChoice = {
   newNodeFen: string;
   parentId: string;
   intra: IntraTranspositionMatch | null;
-  cross: CrossTranspositionMatch | null;
+  cross: CrossTranspositionMatch[];
   isReprompt: boolean;
 };
 
@@ -316,10 +316,10 @@ export default function OpeningDetailScreen() {
     setCurrentHasTrans(false);
     let cancelled = false;
     const timer = setTimeout(async () => {
-      const parent = parentMap.get(currentNode.id);
-      if (!parent) return;
-      const cross = await findTransposition(currentNode.fen, parent.fen, id);
-      if (!cancelled && cross) setCurrentHasTrans(true);
+      // For the boolean badge, any cross-opening match is enough — skip the
+      // path filter (it's a UX hint, not the prompt).
+      const cross = await findTransposition(currentNode.fen, id);
+      if (!cancelled && cross.length > 0) setCurrentHasTrans(true);
     }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [currentNode, id, positionKeyIndex, parentMap, tree]);
@@ -541,17 +541,24 @@ export default function OpeningDetailScreen() {
     }
 
     setPendingFen(newFen);
-    const parentFen = currentNode.fen;
     const parentId = currentNode.id;
+    // User's path (root → new node) — used by findTransposition to filter
+    // out literal shared-trunk duplicates.
+    const userPathSans = [
+      ...getPathNodes(currentNode, parentMap)
+        .map((n) => n.move_san)
+        .filter((s): s is string => !!s),
+      move.san,
+    ];
     setSaving(true);
     try {
       const newNode = await createNode(id, parentId, move.san, move.uci, newFen);
       await reloadTree(newNode.id);
 
       const intra = await findIntraOpeningTransposition(newFen, id, newNode.id);
-      const cross = intra ? null : await findTransposition(newFen, parentFen, id);
+      const cross = intra ? [] : await findTransposition(newFen, id, userPathSans);
 
-      if (intra || cross) {
+      if (intra || cross.length > 0) {
         setTransChoice({
           newNodeId: newNode.id,
           newNodeFen: newFen,
@@ -564,7 +571,7 @@ export default function OpeningDetailScreen() {
     } finally {
       setSaving(false);
     }
-  }, [currentNode, id, saving, reloadTree]);
+  }, [currentNode, id, saving, reloadTree, parentMap]);
 
   // ── Transposition reprompt ───────────────────────────────────────────────
 
@@ -581,9 +588,12 @@ export default function OpeningDetailScreen() {
       return;
     }
 
+    const userPathSans = getPathNodes(node, parentMap)
+      .map((n) => n.move_san)
+      .filter((s): s is string => !!s);
     const intra = await findIntraOpeningTransposition(node.fen, id, node.id);
-    const cross = intra ? null : await findTransposition(node.fen, parent.fen, id);
-    if (!intra && !cross && !node.transposes_to_node_id) return;
+    const cross = intra ? [] : await findTransposition(node.fen, id, userPathSans);
+    if (!intra && cross.length === 0 && !node.transposes_to_node_id) return;
     setTransChoice({
       newNodeId: node.id,
       newNodeFen: node.fen,
@@ -623,12 +633,12 @@ export default function OpeningDetailScreen() {
     }
   }, [transChoice, reloadTree]);
 
-  const handleLinkCross = useCallback(async () => {
+  const handleLinkCross = useCallback(async (canonicalNodeId: string) => {
     const c = transChoice;
-    if (!c || !c.cross) return;
+    if (!c) return;
     setSaving(true);
     try {
-      await linkNode(c.newNodeId, c.cross.canonicalNodeId);
+      await linkNode(c.newNodeId, canonicalNodeId);
       await reloadTree(c.newNodeId);
     } finally {
       setSaving(false);
@@ -636,12 +646,12 @@ export default function OpeningDetailScreen() {
     }
   }, [transChoice, reloadTree]);
 
-  const handleAbsorbCrossFromChoice = useCallback(async () => {
+  const handleAbsorbCrossFromChoice = useCallback(async (canonicalNodeId: string) => {
     const c = transChoice;
-    if (!c?.cross || !id) return;
+    if (!c || !id) return;
     setSaving(true);
     try {
-      await absorbCrossCanonical(c.newNodeId, c.cross.canonicalNodeId, id);
+      await absorbCrossCanonical(c.newNodeId, canonicalNodeId, id);
       await reloadTree(c.newNodeId);
     } finally {
       setSaving(false);
@@ -661,20 +671,6 @@ export default function OpeningDetailScreen() {
       setSaving(false);
     }
   }, [swapCanonical, id, reloadTree]);
-
-  const handleMakeGlobalCanonical = useCallback(async () => {
-    const c = transChoice;
-    if (!c?.intra || !c?.cross || !id) return;
-    setSaving(true);
-    try {
-      await makeCanonical(id, c.newNodeId, c.intra.canonicalNodeId);
-      await absorbCrossCanonical(c.newNodeId, c.cross.canonicalNodeId, id);
-      await reloadTree(c.newNodeId);
-    } finally {
-      setSaving(false);
-      setTransChoice(null);
-    }
-  }, [transChoice, id, reloadTree]);
 
   const handleMakeCanonical = useCallback(async () => {
     const c = confirmCanonical;
@@ -1249,8 +1245,8 @@ export default function OpeningDetailScreen() {
             <Text className="text-content-secondary text-sm mb-4">
               {transChoice?.intra
                 ? 'This position can already be reached via a different move order in this opening.'
-                : transChoice?.cross
-                  ? `This position also appears in ${transChoice.cross.openingName}.`
+                : transChoice && transChoice.cross.length > 0
+                  ? `This position also appears in ${transChoice.cross.map((m) => m.openingName).join(', ')}.`
                   : ''}
             </Text>
             {(() => {
@@ -1285,26 +1281,28 @@ export default function OpeningDetailScreen() {
                   )}
                 </>
               )}
-              {transChoice?.cross && !transChoice?.intra && (
+              {!transChoice?.intra && transChoice?.cross.map((m) => (
                 <ChoiceButton
-                  label={`Link to ${transChoice.cross.openingName}`}
+                  key={`link-${m.openingId}`}
+                  label={`Link to ${m.openingName}`}
                   desc="Next moves jump into that opening's line for this position."
-                  onPress={handleLinkCross}
+                  onPress={() => handleLinkCross(m.canonicalNodeId)}
                   disabled={saving}
                 />
-              )}
-              {transChoice?.cross && !transChoice?.intra && (
+              ))}
+              {!transChoice?.intra && transChoice?.cross.map((m) => (
                 <ChoiceButton
-                  label={`Make this the canonical for all openings`}
-                  desc={`${transChoice.cross.openingName} and everything linked to it will be repointed here. Its continuations are merged into this opening.`}
-                  onPress={handleAbsorbCrossFromChoice}
+                  key={`absorb-${m.openingId}`}
+                  label={`Absorb ${m.openingName} into this opening`}
+                  desc={`${m.openingName} and everything linked to it will be repointed here. Its continuations are merged into this opening.`}
+                  onPress={() => handleAbsorbCrossFromChoice(m.canonicalNodeId)}
                   disabled={saving}
                 />
-              )}
-              {transChoice?.cross && !transChoice?.intra && (
+              ))}
+              {!transChoice?.intra && transChoice && transChoice.cross.length > 0 && (
                 <ChoiceButton
-                  label="Keep as new branching node"
-                  desc="Don't link — track this position separately in this opening."
+                  label="Keep as local canonical"
+                  desc="Don't link to another opening; this move stays as the canonical for this opening."
                   onPress={handleKeepAsNew}
                   disabled={saving}
                 />

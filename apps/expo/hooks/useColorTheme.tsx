@@ -7,14 +7,22 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { View, useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { vars } from 'nativewind';
-import { palettes, hexToRgbChannels, type ColorTheme } from '@pawntree/shared';
+import {
+  palettes,
+  hexToRgbChannels,
+  boardPalettes,
+  DEFAULT_BOARD_PALETTE,
+  type ColorTheme,
+  type BoardPaletteKey,
+} from '@pawntree/shared';
 
-export type { ColorTheme };
+export type { ColorTheme, BoardPaletteKey };
 
 type SchemeMode = 'light' | 'dark';
 export type ThemePref = 'light' | 'dark' | 'system';
 
 const STORAGE_KEY = 'pawntree-theme-pref';
+const BOARD_STORAGE_KEY = 'pawntree-board-theme';
 
 function buildVars(palette: typeof palettes.dark) {
   return vars({
@@ -36,7 +44,8 @@ function buildVars(palette: typeof palettes.dark) {
   });
 }
 
-function buildColorTheme(palette: typeof palettes.dark): ColorTheme {
+function buildColorTheme(palette: typeof palettes.dark, board: BoardPaletteKey): ColorTheme {
+  const b = boardPalettes[board];
   return {
     bg: palette.bg,
     content: palette.content,
@@ -55,7 +64,7 @@ function buildColorTheme(palette: typeof palettes.dark): ColorTheme {
     },
     danger:  palette.danger,
     success: palette.success,
-    board:   palette.board,
+    board:   { dark: b.dark, light: b.light },
   };
 }
 
@@ -64,6 +73,8 @@ interface ThemeContextValue {
   setPref: (p: ThemePref) => void;
   scheme: SchemeMode;
   colors: ColorTheme;
+  boardPref: BoardPaletteKey;
+  setBoardPref: (b: BoardPaletteKey) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -71,10 +82,14 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const systemScheme = useColorScheme();
   const [pref, setPrefState] = useState<ThemePref>('system');
+  const [boardPref, setBoardPrefState] = useState<BoardPaletteKey>(DEFAULT_BOARD_PALETTE);
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then((v) => {
       if (v === 'light' || v === 'dark' || v === 'system') setPrefState(v);
+    });
+    AsyncStorage.getItem(BOARD_STORAGE_KEY).then((v) => {
+      if (v && v in boardPalettes) setBoardPrefState(v as BoardPaletteKey);
     });
   }, []);
 
@@ -83,15 +98,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     AsyncStorage.setItem(STORAGE_KEY, p).catch(() => {});
   };
 
+  const setBoardPref = (b: BoardPaletteKey) => {
+    setBoardPrefState(b);
+    AsyncStorage.setItem(BOARD_STORAGE_KEY, b).catch(() => {});
+  };
+
   const scheme: SchemeMode =
     pref === 'system' ? (systemScheme === 'light' ? 'light' : 'dark') : pref;
 
   const palette = scheme === 'light' ? palettes.light : palettes.dark;
   const themeStyle = useMemo(() => buildVars(palette), [scheme]);
-  const colors = useMemo(() => buildColorTheme(palette), [scheme]);
+  const colors = useMemo(() => buildColorTheme(palette, boardPref), [scheme, boardPref]);
 
   return (
-    <ThemeContext.Provider value={{ pref, setPref, scheme, colors }}>
+    <ThemeContext.Provider value={{ pref, setPref, scheme, colors, boardPref, setBoardPref }}>
       <View style={[{ flex: 1 }, themeStyle]}>{children}</View>
     </ThemeContext.Provider>
   );
