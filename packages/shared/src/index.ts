@@ -6,3 +6,4 @@ export * from './lib/practice';
 export * from './lib/reviews';
 export * from './lib/openings';
 export { initDb } from './lib/db';
+export { PawnTreeIcon, PawnTreeLogo } from './components/PawnTreeLogo';

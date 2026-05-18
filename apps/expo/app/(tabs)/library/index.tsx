@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
   Pressable,
   ScrollView,
+  RefreshControl,
   ActivityIndicator,
   TextInput,
   Modal,
@@ -30,27 +31,32 @@ export default function LibraryScreen() {
   const [openings, setOpenings] = useState<OpeningWithStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
+
+  const fetchOpenings = useCallback(async () => {
+    const [data, learnedCounts, learnableCounts] = await Promise.all([
+      listOpenings(),
+      getLearnedCountsByOpening().catch(() => new Map<string, number>()),
+      getLearnableCountsByOpening().catch(() => new Map<string, number>()),
+    ]);
+    setOpenings(
+      data.map((o) => ({
+        ...o,
+        learnedCount: learnedCounts.get(o.id) ?? 0,
+        learnableCount: learnableCounts.get(o.id) ?? 0,
+      })),
+    );
+  }, []);
 
   const loadOpenings = useCallback(async () => {
     setLoading(true);
     try {
-      const [data, learnedCounts, learnableCounts] = await Promise.all([
-        listOpenings(),
-        getLearnedCountsByOpening().catch(() => new Map<string, number>()),
-        getLearnableCountsByOpening().catch(() => new Map<string, number>()),
-      ]);
-      setOpenings(
-        data.map((o) => ({
-          ...o,
-          learnedCount: learnedCounts.get(o.id) ?? 0,
-          learnableCount: learnableCounts.get(o.id) ?? 0,
-        })),
-      );
+      await fetchOpenings();
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchOpenings]);
 
   useEffect(() => {
     loadOpenings();
@@ -68,7 +74,7 @@ export default function LibraryScreen() {
             <Text className="text-content-primary text-2xl font-semibold">Library</Text>
           </View>
           <Pressable
-            onPress={() => setShowCreate(true)}
+            onPress={() => { setShowCreate(true); fetchOpenings(); }}
             className="flex-row items-center gap-1.5 bg-accent px-4 py-2.5 rounded-xl active:opacity-80"
           >
             <MaterialCommunityIcons name="plus" size={16} color={colorTheme.bg.base} />
@@ -126,7 +132,17 @@ export default function LibraryScreen() {
             </Text>
           </View>
         ) : (
-          <ScrollView className="flex-1 px-5" contentContainerStyle={{ paddingBottom: 20 }}>
+          <ScrollView
+            className="flex-1 px-5"
+            contentContainerStyle={{ paddingBottom: 20 }}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={async () => { setRefreshing(true); await fetchOpenings(); setRefreshing(false); }}
+                tintColor={colorTheme.accent.default}
+              />
+            }
+          >
             <View className="gap-3">
               {filtered.map((opening) => (
                 <OpeningCard
@@ -147,6 +163,7 @@ export default function LibraryScreen() {
       {showCreate && (
         <CreateOpeningModal
           defaultColor={tab}
+          existingOpenings={openings}
           onClose={() => setShowCreate(false)}
           onCreated={() => {
             setShowCreate(false);
@@ -170,7 +187,7 @@ function OpeningCard({
   const { colors: colorTheme } = useColorTheme();
   const isWhite = opening.color === 'white';
 
-  function handleLongPress() {
+  function handleDelete() {
     Alert.alert(
       'Delete Opening',
       `Delete "${opening.name}"? This cannot be undone.`,
@@ -184,11 +201,10 @@ function OpeningCard({
   return (
     <Pressable
       onPress={onPress}
-      onLongPress={handleLongPress}
-      className="bg-bg-surface border border-border rounded-xl overflow-hidden active:opacity-80"
+      className="bg-bg-surface border border-border rounded-xl active:opacity-80"
     >
       {/* Color stripe */}
-      <View className={`h-1 ${isWhite ? 'bg-gold' : 'bg-accent'}`} />
+      <View className={`h-1 rounded-t-xl ${isWhite ? 'bg-gold' : 'bg-accent'}`} />
 
       <View className="p-4">
         <View className="flex-row items-center gap-2 mb-3">
@@ -198,6 +214,13 @@ function OpeningCard({
             color={isWhite ? colorTheme.gold.default : colorTheme.accent.default}
           />
           <Text className="text-content-primary font-medium flex-1">{opening.name}</Text>
+          <Pressable
+            onPress={handleDelete}
+            hitSlop={8}
+            className="p-1 rounded-md active:bg-danger/15"
+          >
+            <MaterialCommunityIcons name="trash-can-outline" size={16} color={colorTheme.danger} />
+          </Pressable>
         </View>
         <View className="flex-row items-center gap-2 flex-wrap">
           <View className="bg-bg-elevated px-2 py-1 rounded-md">
@@ -205,7 +228,7 @@ function OpeningCard({
           </View>
           {opening.learnableCount === 0 ? (
             <View className="bg-bg-elevated px-2 py-1 rounded-md">
-              <Text className="text-content-muted text-xs italic">Nothing reviewable</Text>
+              <Text className="text-content-muted text-xs italic">Nothing studiable</Text>
             </View>
           ) : opening.learnedCount >= opening.learnableCount ? null : (
             <View className="bg-accent/15 px-2 py-1 rounded-md">
@@ -222,10 +245,12 @@ function OpeningCard({
 
 function CreateOpeningModal({
   defaultColor,
+  existingOpenings,
   onClose,
   onCreated,
 }: {
   defaultColor: Tab;
+  existingOpenings: OpeningWithStats[];
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -238,12 +263,20 @@ function CreateOpeningModal({
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit() {
-    if (!name.trim()) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const duplicate = existingOpenings.find(
+      (o) => o.name === trimmed && o.color === color,
+    );
+    if (duplicate) {
+      setError(`You already have a ${color} opening named "${trimmed}".`);
+      return;
+    }
     setSaving(true);
     setProgress(null);
     setError(null);
     try {
-      await createOpening(name.trim(), color, pgn.trim() || null, setProgress);
+      await createOpening(trimmed, color, pgn.trim() || null, setProgress);
       onCreated();
     } catch (err: any) {
       setError(err.message ?? 'Failed to create opening');

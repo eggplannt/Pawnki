@@ -319,7 +319,7 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
       wrongAttemptsHere: session.wrongAttemptsHere + 1,
       mistakes: [...session.mistakes, mistake],
     };
-    return { session: next, verdict: 'wrong', reason: 'Not a move in this opening.' };
+    return { session: next, verdict: 'wrong', reason: 'Wrong move.' };
   }
   // Move exists, but check mode/scope filters.
   if (session.phase === 'main' && session.practicedChildIds.has(match.id)) {

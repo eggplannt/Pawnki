@@ -28,9 +28,15 @@ export function AppShell({ children }: AppShellProps) {
   );
 }
 
+const THEME_OPTIONS = [
+  { value: 'system', icon: '⊙', title: 'Match system' },
+  { value: 'light',  icon: '☀', title: 'Light mode' },
+  { value: 'dark',   icon: '☾', title: 'Dark mode' },
+] as const;
+
 function Sidebar() {
   const { user, signOut } = useAuth();
-  const { theme, toggleTheme } = useColorTheme();
+  const { pref, setPref } = useColorTheme();
 
   return (
     <aside className="hidden lg:flex w-56 flex-col bg-bg-surface border-r border-border py-6 shrink-0">
@@ -66,16 +72,24 @@ function Sidebar() {
       </nav>
 
       <div className="px-5 pt-4 border-t border-border flex flex-col gap-2">
-        <button
-          onClick={toggleTheme}
-          className="flex items-center gap-1.5 text-content-secondary text-sm hover:text-gold transition-colors py-1"
-        >
-          <span>{theme === 'dark' ? '☀' : '☾'}</span>
-          {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-        </button>
+        <div className="flex rounded-lg overflow-hidden border border-border bg-bg-base">
+          {THEME_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setPref(opt.value)}
+              title={opt.title}
+              className={`flex-1 py-1.5 text-sm transition-colors ${
+                pref === opt.value
+                  ? 'text-accent bg-accent/10'
+                  : 'text-content-muted hover:text-content-secondary'
+              }`}
+            >
+              {opt.icon}
+            </button>
+          ))}
+        </div>
         {user && (
           <>
-            <span className="text-content-muted text-xs truncate">{user.email}</span>
             <button
               onClick={signOut}
               className="flex items-center gap-1.5 text-content-secondary text-sm hover:text-content-primary transition-colors py-1"
@@ -91,7 +105,15 @@ function Sidebar() {
 }
 
 function MobileHeader() {
-  const { theme, toggleTheme } = useColorTheme();
+  const { pref, setPref } = useColorTheme();
+
+  const cycleTheme = () => {
+    const order = ['system', 'light', 'dark'] as const;
+    setPref(order[(order.indexOf(pref) + 1) % 3]);
+  };
+
+  const icon = pref === 'system' ? '⊙' : pref === 'light' ? '☀' : '☾';
+  const nextTitle = pref === 'system' ? 'Light mode' : pref === 'light' ? 'Dark mode' : 'Match system';
 
   return (
     <header className="lg:hidden h-13 bg-bg-surface border-b border-border flex items-center justify-between px-4 shrink-0">
@@ -103,11 +125,11 @@ function MobileHeader() {
         </span>
       </div>
       <button
-        onClick={toggleTheme}
+        onClick={cycleTheme}
         className="text-content-secondary hover:text-gold transition-colors text-lg"
-        title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+        title={nextTitle}
       >
-        {theme === 'dark' ? '☀' : '☾'}
+        {icon}
       </button>
     </header>
   );

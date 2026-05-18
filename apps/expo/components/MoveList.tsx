@@ -119,6 +119,8 @@ interface MoveCellProps {
   isWhite: boolean;
   selected: boolean;
   linkKind: 'none' | 'intra' | 'cross';
+  /** Node is a canonical that other nodes link to. */
+  isCanonical: boolean;
   /** This cell's resulting position is the prompt for an unlearned user move.
    *  Renders a strong gold treatment so it's clearly "study this position". */
   isPrompt: boolean;
@@ -127,7 +129,7 @@ interface MoveCellProps {
 }
 
 const MoveCell = memo(function MoveCell({
-  id, san, isWhite, selected, linkKind, isPrompt, onSelect, onLongPress,
+  id, san, isWhite, selected, linkKind, isCanonical, isPrompt, onSelect, onLongPress,
 }: MoveCellProps) {
   const { colors: colorTheme } = useColorTheme();
   const handlePress = useCallback(() => onSelect(id), [onSelect, id]);
@@ -185,6 +187,17 @@ const MoveCell = memo(function MoveCell({
           ⇄
         </Text>
       )}
+      {isCanonical && (
+        <Text
+          style={{
+            fontSize: 9,
+            marginLeft: 3,
+            color: colorTheme.gold.dim,
+          }}
+        >
+          ◆
+        </Text>
+      )}
     </Pressable>
   );
 });
@@ -199,12 +212,14 @@ interface RowProps {
   blackLinkKind: 'none' | 'intra' | 'cross';
   whiteIsPrompt: boolean;
   blackIsPrompt: boolean;
+  whiteIsCanonical: boolean;
+  blackIsCanonical: boolean;
   onSelect: (id: string) => void;
   onLongPress?: (id: string) => void;
 }
 
 const Row = memo(function Row({
-  row, whiteSelected, blackSelected, whiteLinkKind, blackLinkKind, whiteIsPrompt, blackIsPrompt, onSelect, onLongPress,
+  row, whiteSelected, blackSelected, whiteLinkKind, blackLinkKind, whiteIsPrompt, blackIsPrompt, whiteIsCanonical, blackIsCanonical, onSelect, onLongPress,
 }: RowProps) {
   const { colors: colorTheme } = useColorTheme();
   const isVariation = row.depth > 0;
@@ -240,6 +255,7 @@ const Row = memo(function Row({
           selected={whiteSelected}
           linkKind={whiteLinkKind}
           isPrompt={whiteIsPrompt}
+          isCanonical={whiteIsCanonical}
           onSelect={onSelect}
           onLongPress={onLongPress}
         />
@@ -264,6 +280,7 @@ const Row = memo(function Row({
           selected={blackSelected}
           linkKind={blackLinkKind}
           isPrompt={blackIsPrompt}
+          isCanonical={blackIsCanonical}
           onSelect={onSelect}
           onLongPress={onLongPress}
         />
@@ -273,6 +290,11 @@ const Row = memo(function Row({
 });
 
 // ── MoveList ─────────────────────────────────────────────────────────────
+
+// Row height used by getItemLayout so scrollToIndex works without items being
+// pre-rendered. Calculated as: row paddingVertical (2) + cell paddingVertical (4)
+// + fontSize-14 line height (~20) = 26px.
+const ITEM_HEIGHT = 26;
 
 interface MoveListProps {
   root: Node;
@@ -287,12 +309,14 @@ interface MoveListProps {
   learnableSet?: Set<string>;
   /** Opening color so we can decide which nodes are user-moves. */
   userColor?: 'white' | 'black';
+  /** Set of node ids that are canonical targets of link nodes (show ◆). */
+  canonicalIds?: Set<string>;
   onSelect: (id: string) => void;
   onLongPress?: (id: string) => void;
 }
 
 export const MoveList = memo(function MoveList({
-  root, selectedId, linkKinds, learnedSet, learnableSet, userColor, onSelect, onLongPress,
+  root, selectedId, linkKinds, learnedSet, learnableSet, userColor, canonicalIds, onSelect, onLongPress,
 }: MoveListProps) {
   const { colors: colorTheme } = useColorTheme();
   const rows = useMemo(() => flattenTree(root), [root]);
@@ -354,12 +378,14 @@ export const MoveList = memo(function MoveList({
           blackLinkKind={item.blackId ? (linkKinds?.get(item.blackId) ?? 'none') : 'none'}
           whiteIsPrompt={!!item.whiteId && promptSet.has(item.whiteId)}
           blackIsPrompt={!!item.blackId && promptSet.has(item.blackId)}
+          whiteIsCanonical={!!item.whiteId && !!canonicalIds?.has(item.whiteId)}
+          blackIsCanonical={!!item.blackId && !!canonicalIds?.has(item.blackId)}
           onSelect={onSelect}
           onLongPress={onLongPress}
         />
       );
     },
-    [selectedId, onSelect, onLongPress, linkKinds, promptSet],
+    [selectedId, onSelect, onLongPress, linkKinds, promptSet, canonicalIds],
   );
 
   const keyExtractor = useCallback((item: MoveRow) => item.key, []);
@@ -388,24 +414,13 @@ export const MoveList = memo(function MoveList({
       maxToRenderPerBatch={20}
       windowSize={10}
       removeClippedSubviews
+      getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
       contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8 }}
       onScrollToIndexFailed={(info) => {
-        // Item isn't laid out yet — fall back to an estimated offset then retry.
-        setTimeout(() => {
-          listRef.current?.scrollToOffset({
-            offset: info.averageItemLength * info.index,
-            animated: false,
-          });
-          setTimeout(() => {
-            try {
-              listRef.current?.scrollToIndex({
-                index: info.index,
-                animated: true,
-                viewPosition: 0.3,
-              });
-            } catch {}
-          }, 50);
-        }, 50);
+        listRef.current?.scrollToOffset({
+          offset: ITEM_HEIGHT * info.index,
+          animated: false,
+        });
       }}
     />
   );

@@ -217,12 +217,23 @@ export class CrossLinkDeleteError extends Error {
   }
 }
 
-export async function deleteSubtree(nodeId: string, openingId: string) {
+export class IntraLinkConflict extends Error {
+  canonicalId: string;
+  linkNodes: { id: string; move_san: string | null }[];
+  constructor(canonicalId: string, linkNodes: { id: string; move_san: string | null }[]) {
+    super('Other moves link to this position. Choose one to become the new canonical.');
+    this.name = 'IntraLinkConflict';
+    this.canonicalId = canonicalId;
+    this.linkNodes = linkNodes;
+  }
+}
+
+export async function deleteSubtree(nodeId: string, openingId: string, promotedLinkId?: string) {
   // Find any links (in any opening) that point at nodes inside this subtree.
   // - Cross-opening links: BLOCK the delete; user must unlink/absorb first.
-  // - Same-opening links to root: promote one to canonical (existing behavior).
-  // - Same-opening links to non-root descendants: also block, since promoting
-  //   them safely would require re-grafting and we have no clean semantics.
+  // - Same-opening links to root: throw IntraLinkConflict so the caller can
+  //   let the user choose which link to promote as the new canonical.
+  // - Same-opening links to non-root descendants: block (re-grafting is unsafe).
   const db = getDb();
   const allNodes = await getNodes(openingId);
   const subtreeIds = new Set<string>();
@@ -236,7 +247,7 @@ export async function deleteSubtree(nodeId: string, openingId: string) {
 
   const { data: linkRows } = await db
     .from('nodes')
-    .select('id, opening_id, sort_order, transposes_to_node_id, openings(name)')
+    .select('id, opening_id, sort_order, transposes_to_node_id, move_san, openings(name)')
     .in('transposes_to_node_id', [...subtreeIds]);
 
   const crossLinks = (linkRows ?? []).filter((r) => r.opening_id !== openingId);
@@ -253,16 +264,23 @@ export async function deleteSubtree(nodeId: string, openingId: string) {
 
   if (intraToNonRoot.length > 0) {
     throw new Error(
-      'This branch contains nodes that other moves in this opening link to. Re-route those links first.',
+      'This branch contains positions that other moves in this opening link to. Re-route those links first.',
     );
   }
 
   if (intraToRoot.length > 0) {
-    const promoted = intraToRoot[0];
-    await makeCanonical(openingId, promoted.id, nodeId);
-    const { error } = await db.from('nodes').delete().eq('id', nodeId);
-    if (error) throw error;
-    return;
+    if (promotedLinkId) {
+      const promoted = intraToRoot.find((r) => r.id === promotedLinkId);
+      if (!promoted) throw new Error('Selected link not found.');
+      await makeCanonical(openingId, promoted.id, nodeId);
+      const { error } = await db.from('nodes').delete().eq('id', nodeId);
+      if (error) throw error;
+      return;
+    }
+    throw new IntraLinkConflict(
+      nodeId,
+      intraToRoot.map((r) => ({ id: r.id, move_san: (r as any).move_san ?? null })),
+    );
   }
 
   const { error } = await db

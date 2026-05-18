@@ -39,7 +39,7 @@ interface GradeResult {
 }
 
 const QUALITIES: Array<{ q: Quality; label: string; desc: string; tone: 'danger' | 'gold' | 'accent' | 'accentBright' }> = [
-  { q: 1, label: 'Again', desc: 'Missed it',            tone: 'danger' },
+  { q: 1, label: 'Missed', desc: 'Missed it',           tone: 'danger' },
   { q: 2, label: 'Hard',  desc: 'Recalled with effort', tone: 'gold' },
   { q: 4, label: 'Good',  desc: 'Got it',               tone: 'accent' },
   { q: 5, label: 'Easy',  desc: 'Effortless',           tone: 'accentBright' },
@@ -188,7 +188,7 @@ function EntryScreen({
 
         <View className="flex-row gap-3 mb-8">
           <Metric label="Due today" value={String(stats?.dueToday ?? 0)} accent={hasDue} />
-          <Metric label="Learned" value={String(stats?.totalLearned ?? 0)} />
+          <Metric label="In repertoire" value={String(stats?.totalLearned ?? 0)} />
           <Metric
             label="Retention"
             value={stats?.retention === null ? '—' : `${stats?.retention ?? 0}%`}
@@ -434,7 +434,7 @@ function ReviewSession({
         <View className="mx-4 mt-3">
           {hintLevel > 0 && (
             <Text className="text-content-muted text-xs mb-2">
-              You used a hint — only "Again" is available so this position comes back soon.
+              You used a hint — only "Missed" is available so this position comes back soon.
             </Text>
           )}
           <View className="flex-row gap-2">

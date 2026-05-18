@@ -6,7 +6,7 @@
     "scheme": "pawntree",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "splash": {
       "backgroundColor": "#0f1117"
     },

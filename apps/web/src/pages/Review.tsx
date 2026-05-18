@@ -38,7 +38,7 @@ class BoardErrorBoundary extends Component<BoardErrorBoundaryProps, { errored: b
 }
 
 const QUALITIES: Array<{ q: Quality; label: string; desc: string; tone: string }> = [
-  { q: 1, label: 'Again', desc: 'Missed it',            tone: 'bg-danger/15 text-danger border-danger/30 hover:bg-danger/25' },
+  { q: 1, label: 'Missed', desc: 'Missed it',           tone: 'bg-danger/15 text-danger border-danger/30 hover:bg-danger/25' },
   { q: 2, label: 'Hard',  desc: 'Recalled with effort', tone: 'bg-gold/15 text-gold border-gold/30 hover:bg-gold/25' },
   { q: 4, label: 'Good',  desc: 'Got it',               tone: 'bg-accent/15 text-accent border-accent/30 hover:bg-accent/25' },
   { q: 5, label: 'Easy',  desc: 'Effortless',           tone: 'bg-accent/25 text-accent border-accent/40 hover:bg-accent/35' },
@@ -180,7 +180,7 @@ function EntryScreen({
 
         <div className="grid grid-cols-3 gap-3 mb-8">
           <Metric label="Due today" value={String(stats?.dueToday ?? 0)} accent={hasDue} />
-          <Metric label="Learned" value={String(stats?.totalLearned ?? 0)} />
+          <Metric label="In repertoire" value={String(stats?.totalLearned ?? 0)} />
           <Metric
             label="Retention"
             value={stats?.retention === null ? '—' : `${stats?.retention ?? 0}%`}
@@ -540,7 +540,7 @@ function ReviewSession({
           <>
             {hintLevel > 0 && (
               <p className="w-full max-w-[640px] text-xs text-content-muted mt-2">
-                You used a hint — only "Again" is available so this position comes back soon.
+                You used a hint — only "Missed" is available so this position comes back soon.
               </p>
             )}
             <div className="w-full max-w-[640px] grid grid-cols-4 gap-2 mt-3">

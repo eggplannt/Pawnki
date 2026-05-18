@@ -27,6 +27,7 @@ import {
   type ImportProgress,
   type CrossTranspositionMatch,
   type IntraTranspositionMatch,
+  IntraLinkConflict,
   getLearnedNodeIds,
   getCrossOpeningLearnedPositionKeys,
   computeApplicableCounts,
@@ -51,6 +52,79 @@ function movePrefix(node: Node, forceNumber: boolean): string {
   const { moveNum, isWhite } = fenInfo(node.fen);
   if (isWhite) return forceNumber ? `${moveNum - 1}...` : '';
   return `${moveNum}.`;
+}
+
+function moveSanWithNumber(node: Node): string {
+  if (!node.move_san) return '(start)';
+  const { moveNum, isWhite } = fenInfo(node.fen);
+  return isWhite
+    ? `${moveNum - 1}... ${node.move_san}`
+    : `${moveNum}. ${node.move_san}`;
+}
+
+// Returns only the moves at branching points plus the final node — compact path
+// signature that skips forced intermediate moves.
+function keyPathMoves(path: Node[]): Node[] {
+  const moves = path.slice(1);
+  return moves.filter((_, i) => {
+    const parent = path[i];
+    return (parent.children?.length ?? 0) > 1 || i === moves.length - 1;
+  });
+}
+
+function getPathNodes(node: Node, parentMap: Map<string, Node>): Node[] {
+  const path: Node[] = [];
+  let cur: Node | undefined = node;
+  while (cur) {
+    path.unshift(cur);
+    cur = parentMap.get(cur.id);
+  }
+  return path;
+}
+
+type PathDiff = { src: Node[]; tgt: Node[] };
+
+function computePathDiff(
+  srcNode: Node,
+  tgtNode: Node,
+  parentMap: Map<string, Node>,
+  nodeMap: Map<string, Node>,
+): PathDiff | null {
+  const tgtFull = nodeMap.get(tgtNode.id) ?? tgtNode;
+  const srcPath = getPathNodes(srcNode, parentMap);
+  const tgtPath = getPathNodes(tgtFull, parentMap);
+  if (srcPath.length < 2 || tgtPath.length < 2) return null;
+
+  const srcDecisions = new Map<string, Node>();
+  const tgtDecisions = new Map<string, Node>();
+  for (let i = 0; i + 1 < srcPath.length; i++) {
+    const p = srcPath[i];
+    if ((p.children?.length ?? 0) > 1) srcDecisions.set(p.id, srcPath[i + 1]);
+  }
+  for (let i = 0; i + 1 < tgtPath.length; i++) {
+    const p = tgtPath[i];
+    if ((p.children?.length ?? 0) > 1) tgtDecisions.set(p.id, tgtPath[i + 1]);
+  }
+
+  const srcDiff: Node[] = [];
+  const tgtDiff: Node[] = [];
+  for (const [pid, sTaken] of srcDecisions) {
+    const tTaken = tgtDecisions.get(pid);
+    if (tTaken && tTaken.id !== sTaken.id) {
+      srcDiff.push(sTaken);
+      tgtDiff.push(tTaken);
+    }
+  }
+  if (srcDiff.length === 0) return null;
+
+  const ply = (n: Node) => {
+    const { moveNum, isWhite } = fenInfo(n.fen);
+    return isWhite ? 2 * moveNum - 2 : 2 * moveNum - 1;
+  };
+  return {
+    src: srcDiff.sort((a, b) => ply(a) - ply(b)),
+    tgt: tgtDiff.sort((a, b) => ply(a) - ply(b)),
+  };
 }
 
 function buildParentMap(root: Node): Map<string, Node> {
@@ -147,6 +221,8 @@ export default function OpeningDetailScreen() {
   const [crossLearnedPositionKeys, setCrossLearnedPositionKeys] = useState<Set<string>>(new Set());
   const [startMode, setStartMode] = useState<'learn' | 'practice' | null>(null);
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
+  const [linkConflict, setLinkConflict] = useState<IntraLinkConflict | null>(null);
+  const [swapCanonical, setSwapCanonical] = useState<{ canonicalId: string; linkNodes: Node[] } | null>(null);
 
   const parentMap = useMemo(
     () => (tree ? buildParentMap(tree) : new Map<string, Node>()),
@@ -177,6 +253,11 @@ export default function OpeningDetailScreen() {
   }, [nodeMap]);
 
   const linkEntries = useMemo(() => (tree ? collectLinks(tree) : []), [tree]);
+
+  const canonicalTargetIds = useMemo(
+    () => new Set(linkEntries.map((e) => e.targetId)),
+    [linkEntries],
+  );
 
   const learnableMap = useMemo(
     () => (tree ? computeLearnableMap(tree, opening.color) : new Map<string, boolean>()),
@@ -491,6 +572,15 @@ export default function OpeningDetailScreen() {
     if (!id) return;
     const parent = parentMap.get(node.id);
     if (!parent) return;
+
+    // If this node is a canonical (other nodes link to it), show the swap flow
+    // instead — the regular options would be circular/nonsensical.
+    const intraLinksToThis = linkEntries.filter((e) => e.targetId === node.id);
+    if (intraLinksToThis.length > 0) {
+      setSwapCanonical({ canonicalId: node.id, linkNodes: intraLinksToThis.map((e) => e.node) });
+      return;
+    }
+
     const intra = await findIntraOpeningTransposition(node.fen, id, node.id);
     const cross = intra ? null : await findTransposition(node.fen, parent.fen, id);
     if (!intra && !cross && !node.transposes_to_node_id) return;
@@ -502,7 +592,7 @@ export default function OpeningDetailScreen() {
       cross,
       isReprompt: true,
     });
-  }, [id, parentMap]);
+  }, [id, parentMap, linkEntries]);
 
   // ── Transposition actions ────────────────────────────────────────────────
 
@@ -545,6 +635,46 @@ export default function OpeningDetailScreen() {
       setTransChoice(null);
     }
   }, [transChoice, reloadTree]);
+
+  const handleAbsorbCrossFromChoice = useCallback(async () => {
+    const c = transChoice;
+    if (!c?.cross || !id) return;
+    setSaving(true);
+    try {
+      await absorbCrossCanonical(c.newNodeId, c.cross.canonicalNodeId, id);
+      await reloadTree(c.newNodeId);
+    } finally {
+      setSaving(false);
+      setTransChoice(null);
+    }
+  }, [transChoice, id, reloadTree]);
+
+  const handleSwapCanonical = useCallback(async (linkNodeId: string) => {
+    const s = swapCanonical;
+    if (!s || !id) return;
+    setSaving(true);
+    try {
+      await makeCanonical(id, linkNodeId, s.canonicalId);
+      setSwapCanonical(null);
+      await reloadTree(linkNodeId);
+    } finally {
+      setSaving(false);
+    }
+  }, [swapCanonical, id, reloadTree]);
+
+  const handleMakeGlobalCanonical = useCallback(async () => {
+    const c = transChoice;
+    if (!c?.intra || !c?.cross || !id) return;
+    setSaving(true);
+    try {
+      await makeCanonical(id, c.newNodeId, c.intra.canonicalNodeId);
+      await absorbCrossCanonical(c.newNodeId, c.cross.canonicalNodeId, id);
+      await reloadTree(c.newNodeId);
+    } finally {
+      setSaving(false);
+      setTransChoice(null);
+    }
+  }, [transChoice, id, reloadTree]);
 
   const handleMakeCanonical = useCallback(async () => {
     const c = confirmCanonical;
@@ -589,19 +719,42 @@ export default function OpeningDetailScreen() {
 
   // ── Delete ───────────────────────────────────────────────────────────────
 
-  const handleDelete = useCallback(async () => {
+  const handleDelete = useCallback(async (promotedLinkId?: string) => {
     if (!currentNode || !id || !parentMap.has(currentNode.id)) return;
     const parentId = parentMap.get(currentNode.id)!.id;
     setSaving(true);
     try {
-      await deleteSubtree(currentNode.id, id);
-      await reloadTree(parentId);
+      await deleteSubtree(currentNode.id, id, promotedLinkId);
+      setLinkConflict(null);
+      await reloadTree(promotedLinkId ?? parentId);
     } catch (e: any) {
-      setDeleteBlocked(e?.message ?? 'Could not delete this branch.');
+      if (e instanceof IntraLinkConflict) {
+        setLinkConflict(e);
+      } else {
+        setDeleteBlocked(e?.message ?? 'Could not delete this branch.');
+      }
     } finally {
       setSaving(false);
     }
   }, [currentNode, id, parentMap, reloadTree]);
+
+  const handleDeleteLinkReprompt = useCallback(async () => {
+    const c = transChoice;
+    if (!c?.isReprompt || !id) return;
+    const lNode = nodeMap.get(c.newNodeId);
+    if (!lNode || !parentMap.has(lNode.id)) return;
+    const parentId = parentMap.get(lNode.id)!.id;
+    setSaving(true);
+    try {
+      await deleteSubtree(c.newNodeId, id);
+      setTransChoice(null);
+      await reloadTree(parentId);
+    } catch (e: any) {
+      setDeleteBlocked(e?.message ?? 'Could not delete.');
+    } finally {
+      setSaving(false);
+    }
+  }, [transChoice, id, nodeMap, parentMap, reloadTree]);
 
   // ── Annotation ───────────────────────────────────────────────────────────
 
@@ -809,7 +962,7 @@ export default function OpeningDetailScreen() {
           >
             <MaterialCommunityIcons name="chess-pawn" size={14} color={colorTheme.accent.default} />
             <Text className="text-content-secondary text-xs font-medium uppercase tracking-wider">
-              Moves
+              PGN
             </Text>
           </Pressable>
           <Pressable
@@ -831,11 +984,11 @@ export default function OpeningDetailScreen() {
                   disabled={saving}
                   className="px-2 py-1 rounded-md bg-accent/10 active:bg-accent/20 mr-1"
                 >
-                  <Text className="text-accent text-xs font-medium">Transpose</Text>
+                  <Text className="text-accent text-xs font-medium">Transpose options</Text>
                 </Pressable>
               )}
               <Pressable
-                onPress={handleDelete}
+                onPress={() => handleDelete()}
                 disabled={saving}
                 className="px-2 py-1 rounded-md bg-danger/15 active:bg-danger/25"
               >
@@ -853,6 +1006,7 @@ export default function OpeningDetailScreen() {
               learnedSet={effectiveLearnedNodeIds}
               learnableSet={learnableSet}
               userColor={openingColor}
+              canonicalIds={canonicalTargetIds}
               onSelect={selectNode}
               onLongPress={(nodeId) => {
                 const n = nodeMap.get(nodeId);
@@ -869,6 +1023,8 @@ export default function OpeningDetailScreen() {
             linkEntries={linkEntries}
             targets={transTargets}
             currentOpeningId={id}
+            parentMap={parentMap}
+            nodeMap={nodeMap}
             onJump={selectNode}
             onReprompt={openTransReprompt}
             onUnlink={handleUnlink}
@@ -924,10 +1080,10 @@ export default function OpeningDetailScreen() {
                         ? isLearn ? 'text-accent' : 'text-gold'
                         : 'text-content-muted'
                     }`}>
-                      From beginning
+                      Whole opening
                     </Text>
                     <Text className={`text-xs mt-0.5 ${fromRootEnabled ? (isLearn ? 'text-accent/70' : 'text-gold/70') : 'text-content-muted'}`}>
-                      Walk the entire opening
+                      {isLearn ? 'Find unlearned positions across all branches' : 'Find practice-ready positions across all branches'}
                     </Text>
                   </Pressable>
                   <Pressable
@@ -947,11 +1103,11 @@ export default function OpeningDetailScreen() {
                         ? isLearn ? 'text-accent' : 'text-gold'
                         : 'text-content-muted'
                     }`}>
-                      From this position
+                      This branch only
                     </Text>
                     <Text className={`text-xs mt-0.5 ${fromHereEnabled ? (isLearn ? 'text-accent/70' : 'text-gold/70') : 'text-content-muted'}`}>
                       {fromHereEnabled
-                        ? `Only the subtree below ${currentNode.move_san ?? 'the start'}`
+                        ? `Positions below ${currentNode.move_san ?? 'the start'} only`
                         : isLearn ? 'Nothing left to learn here' : 'Nothing learned here yet'}
                     </Text>
                   </Pressable>
@@ -989,6 +1145,95 @@ export default function OpeningDetailScreen() {
         </View>
       </Modal>
 
+      {/* Swap-canonical picker (when selected node is itself a canonical target) */}
+      <Modal
+        visible={!!swapCanonical}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSwapCanonical(null)}
+      >
+        <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+          <View className="bg-bg-elevated border border-border rounded-xl p-5 w-full max-w-md">
+            <Text className="text-content-primary font-semibold text-base mb-2">Swap canonical</Text>
+            <Text className="text-content-secondary text-sm mb-4">
+              {swapCanonical?.linkNodes.length === 1
+                ? 'One move links to this position.'
+                : `${swapCanonical?.linkNodes.length} moves link to this position.`}
+              {' '}Select which should become the canonical path:
+            </Text>
+            <Text className="text-content-secondary text-xs font-medium uppercase tracking-wider mb-2">{opening.name}</Text>
+            <View className="gap-2">
+              {swapCanonical?.linkNodes.map((ln) => {
+                const path = getPathNodes(ln, parentMap);
+                const pathStr = keyPathMoves(path).slice(-5).map(moveSanWithNumber).join(' ');
+                return (
+                  <Pressable
+                    key={ln.id}
+                    onPress={() => handleSwapCanonical(ln.id)}
+                    disabled={saving}
+                    className="border border-border rounded-lg px-3 py-2 active:bg-bg-surface"
+                    style={{ opacity: saving ? 0.5 : 1 }}
+                  >
+                    <Text className="text-content-muted text-xs font-mono">{pathStr || ln.move_san || '?'}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Pressable
+              onPress={() => setSwapCanonical(null)}
+              className="mt-4 py-2 rounded-lg border border-border items-center"
+            >
+              <Text className="text-content-secondary text-sm">Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* IntraLink conflict picker */}
+      <Modal
+        visible={!!linkConflict}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLinkConflict(null)}
+      >
+        <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+          <View className="bg-bg-elevated border border-border rounded-xl p-5 w-full max-w-md">
+            <Text className="text-content-primary font-semibold text-base mb-2">Choose new canonical</Text>
+            <Text className="text-content-secondary text-sm mb-4">
+              {linkConflict?.linkNodes.length === 1
+                ? 'One move in this opening links to this position.'
+                : `${linkConflict?.linkNodes.length} moves in this opening link to this position.`}
+              {' '}Select which should become the canonical path:
+            </Text>
+            <Text className="text-content-secondary text-xs font-medium uppercase tracking-wider mb-2">{opening.name}</Text>
+            <View className="gap-2">
+              {linkConflict?.linkNodes.map((ln) => {
+                const lNode = nodeMap.get(ln.id);
+                const path = lNode ? getPathNodes(lNode, parentMap) : [];
+                const pathStr = keyPathMoves(path).slice(-5).map(moveSanWithNumber).join(' ');
+                return (
+                  <Pressable
+                    key={ln.id}
+                    onPress={() => handleDelete(ln.id)}
+                    disabled={saving}
+                    className="border border-border rounded-lg px-3 py-2 active:bg-bg-surface"
+                    style={{ opacity: saving ? 0.5 : 1 }}
+                  >
+                    <Text className="text-content-muted text-xs font-mono">{pathStr || ln.move_san || '?'}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Pressable
+              onPress={() => setLinkConflict(null)}
+              className="mt-4 py-2 rounded-lg border border-border items-center"
+            >
+              <Text className="text-content-secondary text-sm">Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       {/* Choice modal */}
       <Modal
         visible={!!transChoice}
@@ -999,7 +1244,7 @@ export default function OpeningDetailScreen() {
         <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
           <View className="bg-bg-elevated border border-border rounded-xl p-5 w-full max-w-md">
             <Text className="text-content-primary font-semibold text-base mb-2">
-              Transposition detected
+              {transChoice?.isReprompt ? 'Transposition' : 'Transposition detected'}
             </Text>
             <Text className="text-content-secondary text-sm mb-4">
               {transChoice?.intra
@@ -1008,28 +1253,51 @@ export default function OpeningDetailScreen() {
                   ? `This position also appears in ${transChoice.cross.openingName}.`
                   : ''}
             </Text>
+            {(() => {
+              const canonicalHasOtherLinks = !!(transChoice?.intra && linkEntries.some(
+                (e) => e.targetId === transChoice.intra!.canonicalNodeId && e.node.id !== transChoice.newNodeId,
+              ));
+              return (
             <View className="gap-2">
               {transChoice?.intra && (
                 <>
                   <ChoiceButton
-                    label="Link to existing"
-                    desc="Make this a transposition into the canonical node."
+                    label={transChoice?.isReprompt ? 'Keep existing link' : 'Link to existing'}
+                    desc={transChoice?.isReprompt ? 'No change — keep this move linking to the canonical node.' : 'Make this a transposition into the canonical node.'}
                     onPress={handleLinkIntra}
                     disabled={saving}
                   />
-                  <ChoiceButton
-                    label="Make this canonical"
-                    desc="Move children from the other path onto this node; old node becomes a link."
-                    onPress={() => setConfirmCanonical(transChoice)}
-                    disabled={saving}
-                  />
+                  {!canonicalHasOtherLinks && (
+                    <ChoiceButton
+                      label="Make this the canonical for this opening"
+                      desc="Move children from the other path onto this node; old node becomes a link."
+                      onPress={() => setConfirmCanonical(transChoice)}
+                      disabled={saving}
+                    />
+                  )}
+                  {transChoice.isReprompt && (
+                    <ChoiceButton
+                      label="Delete this position"
+                      desc="Remove this link from the opening entirely."
+                      onPress={handleDeleteLinkReprompt}
+                      disabled={saving}
+                    />
+                  )}
                 </>
               )}
-              {transChoice?.cross && (
+              {transChoice?.cross && !transChoice?.intra && (
                 <ChoiceButton
                   label={`Link to ${transChoice.cross.openingName}`}
-                  desc="Treat as a cross-opening transposition."
+                  desc="Next moves jump into that opening's line for this position."
                   onPress={handleLinkCross}
+                  disabled={saving}
+                />
+              )}
+              {transChoice?.cross && !transChoice?.intra && (
+                <ChoiceButton
+                  label={`Make this the canonical for all openings`}
+                  desc={`${transChoice.cross.openingName} and everything linked to it will be repointed here. Its continuations are merged into this opening.`}
+                  onPress={handleAbsorbCrossFromChoice}
                   disabled={saving}
                 />
               )}
@@ -1042,6 +1310,8 @@ export default function OpeningDetailScreen() {
                 />
               )}
             </View>
+              );
+            })()}
             <View className="flex-row gap-2 mt-4">
               <Pressable
                 onPress={transChoice?.isReprompt ? () => setTransChoice(null) : handleCancelNewMove}
@@ -1348,11 +1618,13 @@ function ChoiceButton({
 }
 
 function LinksPanel({
-  linkEntries, targets, currentOpeningId, onJump, onReprompt, onUnlink, onAbsorb, disabled,
+  linkEntries, targets, currentOpeningId, parentMap, nodeMap, onJump, onReprompt, onUnlink, onAbsorb, disabled,
 }: {
   linkEntries: LinkEntry[];
   targets: Map<string, TargetInfo>;
   currentOpeningId: string;
+  parentMap: Map<string, Node>;
+  nodeMap: Map<string, Node>;
   onJump: (id: string) => void;
   onReprompt: (n: Node) => void;
   onUnlink: (n: Node) => void;
@@ -1360,6 +1632,7 @@ function LinksPanel({
   disabled: boolean;
 }) {
   const { colors: colorTheme } = useColorTheme();
+
   if (linkEntries.length === 0) {
     return (
       <View className="flex-1 items-center justify-center p-6">
@@ -1369,59 +1642,113 @@ function LinksPanel({
       </View>
     );
   }
+
+  // Group link entries by canonical (targetId)
+  const groups = new Map<string, LinkEntry[]>();
+  for (const entry of linkEntries) {
+    const list = groups.get(entry.targetId) ?? [];
+    list.push(entry);
+    groups.set(entry.targetId, list);
+  }
+
+  const fmt = (nodes: Node[]) =>
+    nodes.slice(0, 2).map(moveSanWithNumber).join(', ') + (nodes.length > 2 ? ` +${nodes.length - 2}` : '');
+
   return (
     <ScrollView contentContainerStyle={{ padding: 12 }}>
-      {linkEntries.map((entry) => {
-        const target = targets.get(entry.targetId);
+      {Array.from(groups.entries()).map(([targetId, entries]) => {
+        const target = targets.get(targetId);
         const isCross = !!target && target.openingId !== currentOpeningId;
+
+        // Canonical's preceding branching decisions (intra only — cross canonical not in our tree)
+        const canonicalVia = !isCross && target
+          ? (() => {
+              const km = keyPathMoves(getPathNodes(target.node, parentMap)).slice(0, -1);
+              return km.length ? fmt(km) : null;
+            })()
+          : null;
+
         return (
-          <View
-            key={entry.node.id}
-            className="bg-bg-surface border border-border rounded-lg p-3 mb-2"
-          >
-            <View className="flex-row items-center gap-2 mb-1">
-              <Text style={{ color: isCross ? colorTheme.accent.default : colorTheme.gold.dim, fontSize: 14 }}>⇄</Text>
-              <Pressable onPress={() => onJump(entry.node.id)} className="flex-1">
-                <Text className="text-content-primary text-sm font-medium">
-                  {entry.node.move_san ?? '(root)'}
+          <View key={targetId} className="bg-bg-surface border border-border rounded-xl mb-3 overflow-hidden">
+            {/* Canonical header */}
+            <Pressable
+              onPress={() => target && onJump(target.node.id)}
+              style={{ backgroundColor: isCross ? colorTheme.accent.default + '18' : colorTheme.gold.default + '12' }}
+              className="px-3 pt-2.5 pb-2"
+            >
+              <View className="flex-row items-center gap-1.5">
+                <Text style={{ color: isCross ? colorTheme.accent.default : colorTheme.gold.dim, fontSize: 11 }}>◆</Text>
+                <Text className="text-content-primary text-sm font-semibold">
+                  {target ? moveSanWithNumber(target.node) : '…'}
+                  {canonicalVia ? (
+                    <Text style={{ color: colorTheme.content.muted, fontWeight: '400' }}> via {canonicalVia}</Text>
+                  ) : null}
                 </Text>
-              </Pressable>
-            </View>
-            <Text className="text-content-muted text-xs mb-2">
-              → {target ? (isCross ? `${target.openingName} (${target.openingColor})` : 'this opening') : 'unknown'}
-            </Text>
-            <View className="flex-row gap-2 flex-wrap">
-              <Pressable
-                onPress={() => onReprompt(entry.node)}
-                disabled={disabled}
-                className="px-2 py-1 rounded-md bg-accent/10 active:bg-accent/20"
-              >
-                <Text className="text-accent text-xs">Change</Text>
-              </Pressable>
+              </View>
               {isCross && target && (
-                <>
-                  <Pressable
-                    onPress={() => onAbsorb(entry.node, target)}
-                    disabled={disabled}
-                    className="px-2 py-1 rounded-md bg-gold/10 active:bg-gold/20"
-                  >
-                    <Text className="text-gold text-xs">Absorb</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => onUnlink(entry.node)}
-                    disabled={disabled}
-                    className="px-2 py-1 rounded-md bg-danger/10 active:bg-danger/20"
-                  >
-                    <Text className="text-danger text-xs">Unlink</Text>
-                  </Pressable>
-                </>
-              )}
-              {!isCross && (
-                <Text className="text-content-muted text-xs self-center italic">
-                  intra (cannot unlink)
+                <Text style={{ color: colorTheme.accent.default }} className="text-xs mt-0.5 ml-4">
+                  {target.openingName}
                 </Text>
               )}
-            </View>
+            </Pressable>
+
+            {/* Link rows */}
+            {entries.map((entry, idx) => {
+              const diff = !isCross && target
+                ? computePathDiff(entry.node, target.node, parentMap, nodeMap)
+                : null;
+              const linkVia = diff?.src.length
+                ? fmt(diff.src)
+                : isCross
+                  ? (() => {
+                      const km = keyPathMoves(getPathNodes(entry.node, parentMap)).slice(0, -1);
+                      return km.length ? fmt(km) : null;
+                    })()
+                  : null;
+
+              return (
+                <View
+                  key={entry.node.id}
+                  className={`flex-row items-center gap-2 px-3 py-2${idx < entries.length - 1 ? ' border-b border-border' : ''}`}
+                >
+                  <Pressable onPress={() => onJump(entry.node.id)} className="flex-1">
+                    <Text className="text-content-secondary text-sm">
+                      {moveSanWithNumber(entry.node)}
+                      {linkVia ? (
+                        <Text style={{ color: colorTheme.content.muted }}> via {linkVia}</Text>
+                      ) : null}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => onReprompt(entry.node)}
+                    disabled={disabled}
+                    className="px-2 py-1 rounded-md bg-accent/10 active:bg-accent/20"
+                  >
+                    <Text className="text-accent text-xs">Change</Text>
+                  </Pressable>
+                  {isCross && target ? (
+                    <>
+                      <Pressable
+                        onPress={() => onAbsorb(entry.node, target)}
+                        disabled={disabled}
+                        className="px-2 py-1 rounded-md bg-gold/10 active:bg-gold/20"
+                      >
+                        <Text className="text-gold text-xs">Absorb</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => onUnlink(entry.node)}
+                        disabled={disabled}
+                        className="px-2 py-1 rounded-md bg-danger/10 active:bg-danger/20"
+                      >
+                        <Text className="text-danger text-xs">Unlink</Text>
+                      </Pressable>
+                    </>
+                  ) : (
+                    <Text style={{ color: colorTheme.content.muted }} className="text-xs italic">intra</Text>
+                  )}
+                </View>
+              );
+            })}
           </View>
         );
       })}

@@ -3,20 +3,21 @@ import { palettes, hexToRgbChannels, type ColorTheme } from '@pawntree/shared';
 
 export type { ColorTheme };
 
-type Theme = 'dark' | 'light';
+export type ThemePref = 'light' | 'dark' | 'system';
+type Theme = 'light' | 'dark';
 
 const STORAGE_KEY = 'pawntree-theme';
 
-function getInitialTheme(): Theme {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored === 'light' || stored === 'dark') return stored;
+function getSystemScheme(): Theme {
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
-/** Flatten palette object → CSS custom property entries with rgb channels.
- *  { bg: { base: '#fff' } }         → { '--color-bg-base': '255 255 255' }
- *  { accent: { DEFAULT: '#0f0' } }  → { '--color-accent': '0 255 0' }
- */
+function getInitialPref(): ThemePref {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored === 'light' || stored === 'dark' || stored === 'system') return stored;
+  return 'system';
+}
+
 function flattenToCssVars(obj: Record<string, unknown>, prefix = '--color'): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(obj)) {
@@ -30,7 +31,6 @@ function flattenToCssVars(obj: Record<string, unknown>, prefix = '--color'): Rec
   return result;
 }
 
-/** Apply palette as CSS custom properties on :root so Tailwind `var()` refs work. */
 function applyPalette(palette: Record<string, unknown>) {
   const cssVars = flattenToCssVars(palette);
   const root = document.documentElement.style;
@@ -49,15 +49,11 @@ function applyTheme(theme: Theme) {
   applyPalette(palettes[theme] as unknown as Record<string, unknown>);
 }
 
-/** Read a CSS custom property and reassemble as an `rgb(...)` color.
- *  Vars are stored as "r g b" channels (for alpha composition in Tailwind);
- *  raw consumers (SVGs, chart libs) need a real color string. */
 function cssVar(name: string): string {
   const channels = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return channels ? `rgb(${channels})` : '';
 }
 
-/** Returns the current resolved color values (for third-party components). */
 export function getColorValues(): ColorTheme {
   return {
     bg: {
@@ -94,6 +90,8 @@ export function getColorValues(): ColorTheme {
 
 interface ThemeContextValue {
   theme: Theme;
+  pref: ThemePref;
+  setPref: (p: ThemePref) => void;
   toggleTheme: () => void;
   colors: ColorTheme;
 }
@@ -103,24 +101,39 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 export { ThemeContext };
 
 export function useThemeProvider() {
-  const [theme, setTheme] = useState<Theme>(() => {
-    const t = getInitialTheme();
-    applyTheme(t); // apply immediately so CSS vars are set before first paint
-    return t;
+  const [pref, setPrefState] = useState<ThemePref>(() => {
+    const p = getInitialPref();
+    applyTheme(p === 'system' ? getSystemScheme() : p);
+    return p;
   });
+  const [systemScheme, setSystemScheme] = useState<Theme>(getSystemScheme);
   const [colors, setColors] = useState<ColorTheme>(getColorValues);
+
+  // Track OS-level theme changes
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    const handler = (e: MediaQueryListEvent) => setSystemScheme(e.matches ? 'light' : 'dark');
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  const theme: Theme = pref === 'system' ? systemScheme : pref;
 
   useEffect(() => {
     applyTheme(theme);
-    localStorage.setItem(STORAGE_KEY, theme);
     requestAnimationFrame(() => setColors(getColorValues()));
   }, [theme]);
 
-  const toggleTheme = useCallback(() => {
-    setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+  const setPref = useCallback((p: ThemePref) => {
+    setPrefState(p);
+    localStorage.setItem(STORAGE_KEY, p);
   }, []);
 
-  return { theme, toggleTheme, colors };
+  const toggleTheme = useCallback(() => {
+    setPref(theme === 'dark' ? 'light' : 'dark');
+  }, [theme, setPref]);
+
+  return { theme, pref, setPref, toggleTheme, colors };
 }
 
 export function useColorTheme(): ThemeContextValue {

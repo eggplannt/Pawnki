@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import Icon from '@mdi/react';
-import { mdiChessKing } from '@mdi/js';
+import { mdiChessKing, mdiDelete } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
 import { listOpenings, deleteOpening, getLearnableCountsByOpening, getLearnedCountsByOpening, type Opening } from '@pawntree/shared';
 
@@ -29,21 +29,25 @@ export default function Library() {
     loadOpenings();
   }, []);
 
+  async function fetchOpenings() {
+    const [data, learnedCounts, learnableCounts] = await Promise.all([
+      listOpenings(),
+      getLearnedCountsByOpening().catch(() => new Map<string, number>()),
+      getLearnableCountsByOpening().catch(() => new Map<string, number>()),
+    ]);
+    setOpenings(
+      data.map((o) => ({
+        ...o,
+        learnedCount: learnedCounts.get(o.id) ?? 0,
+        learnableCount: learnableCounts.get(o.id) ?? 0,
+      })),
+    );
+  }
+
   async function loadOpenings() {
     setLoading(true);
     try {
-      const [data, learnedCounts, learnableCounts] = await Promise.all([
-        listOpenings(),
-        getLearnedCountsByOpening().catch(() => new Map<string, number>()),
-        getLearnableCountsByOpening().catch(() => new Map<string, number>()),
-      ]);
-      setOpenings(
-        data.map((o) => ({
-          ...o,
-          learnedCount: learnedCounts.get(o.id) ?? 0,
-          learnableCount: learnableCounts.get(o.id) ?? 0,
-        })),
-      );
+      await fetchOpenings();
     } finally {
       setLoading(false);
     }
@@ -57,13 +61,23 @@ export default function Library() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-content-primary text-2xl font-semibold">Library</h1>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-bg-base font-medium text-sm px-4 py-2.5 rounded-xl transition-colors shadow-sm shadow-accent/20"
-          >
-            <span className="text-lg leading-none">+</span>
-            New Opening
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => loadOpenings()}
+              disabled={loading}
+              title="Refresh"
+              className="w-9 h-9 flex items-center justify-center rounded-xl border border-border text-content-muted hover:text-content-primary hover:border-accent/40 transition-colors disabled:opacity-40"
+            >
+              <span className={loading ? 'animate-spin inline-block' : ''}>↻</span>
+            </button>
+            <button
+              onClick={() => { setShowCreate(true); fetchOpenings(); }}
+              className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-bg-base font-medium text-sm px-4 py-2.5 rounded-xl transition-colors shadow-sm shadow-accent/20"
+            >
+              <span className="text-lg leading-none">+</span>
+              New Opening
+            </button>
+          </div>
         </div>
 
         {/* Tabs */}
@@ -116,6 +130,7 @@ export default function Library() {
       {showCreate && (
         <CreateOpeningModal
           defaultColor={tab}
+          existingOpenings={openings}
           onClose={() => setShowCreate(false)}
           onCreated={() => {
             setShowCreate(false);
@@ -128,25 +143,10 @@ export default function Library() {
 }
 
 function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDeleted: () => void }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const navigate = useNavigate();
   const isWhite = opening.color === 'white';
 
-  // Close menu on outside click
-  useEffect(() => {
-    if (!menuOpen) return;
-    function onClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as globalThis.Node)) {
-        setMenuOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [menuOpen]);
-
-  async function handleDelete() {
-    setMenuOpen(false);
+  async function handleDelete(e: React.MouseEvent) {
+    e.preventDefault();
     if (!confirm(`Delete "${opening.name}"? This cannot be undone.`)) return;
     await deleteOpening(opening.id);
     onDeleted();
@@ -158,7 +158,7 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
       <div className={`h-1 rounded-t-xl ${isWhite ? 'bg-gold' : 'bg-accent'}`} />
 
       <Link to={`/library/${opening.id}`} className="block p-4">
-        <div className="flex items-start justify-between mb-3 pr-6">
+        <div className="flex items-start justify-between mb-3 pr-8">
           <div className="flex items-center gap-2">
             <Icon path={mdiChessKing} size={0.85} color={`rgb(var(--color-${isWhite ? 'gold' : 'accent'}))`} />
             <h3 className="text-content-primary font-medium group-hover:text-accent transition-colors">
@@ -172,7 +172,7 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
           </span>
           {opening.learnableCount === 0 ? (
             <span className="bg-bg-elevated text-content-muted text-xs px-2 py-1 rounded-md italic">
-              Nothing reviewable
+              Nothing studiable
             </span>
           ) : opening.learnedCount >= opening.learnableCount ? null : (
             <span className="bg-accent/15 text-accent text-xs font-medium px-2 py-1 rounded-md">
@@ -182,31 +182,14 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
         </div>
       </Link>
 
-      {/* Three-dot menu */}
-      <div ref={menuRef} className="absolute top-4 right-3">
-        <button
-          onClick={(e) => { e.preventDefault(); setMenuOpen(!menuOpen); }}
-          className="w-7 h-7 flex items-center justify-center rounded-md text-content-muted hover:text-content-primary hover:bg-bg-elevated transition-colors"
-        >
-          ···
-        </button>
-        {menuOpen && (
-          <div className="absolute right-0 top-8 bg-bg-elevated border border-border rounded-xl shadow-lg py-1 z-10 min-w-[120px]">
-            <button
-              onClick={() => { setMenuOpen(false); navigate(`/library/${opening.id}`); }}
-              className="w-full text-left px-3 py-2 text-sm text-content-primary hover:bg-bg-surface transition-colors"
-            >
-              Open
-            </button>
-            <button
-              onClick={handleDelete}
-              className="w-full text-left px-3 py-2 text-sm text-danger hover:bg-bg-surface transition-colors"
-            >
-              Delete
-            </button>
-          </div>
-        )}
-      </div>
+      {/* Delete button */}
+      <button
+        onClick={handleDelete}
+        title="Delete opening"
+        className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-md text-content-muted opacity-0 group-hover:opacity-100 hover:text-danger hover:bg-danger/10 transition-all"
+      >
+        <Icon path={mdiDelete} size={0.6} />
+      </button>
     </div>
   );
 }
@@ -217,10 +200,12 @@ import { createOpening, type ImportProgress } from '@pawntree/shared';
 
 function CreateOpeningModal({
   defaultColor,
+  existingOpenings,
   onClose,
   onCreated,
 }: {
   defaultColor: Tab;
+  existingOpenings: OpeningWithStats[];
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -233,12 +218,20 @@ function CreateOpeningModal({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim()) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const duplicate = existingOpenings.find(
+      (o) => o.name === trimmed && o.color === color,
+    );
+    if (duplicate) {
+      setError(`You already have a ${color} opening named "${trimmed}".`);
+      return;
+    }
     setSaving(true);
     setProgress(null);
     setError(null);
     try {
-      await createOpening(name.trim(), color, pgn.trim() || null, setProgress);
+      await createOpening(trimmed, color, pgn.trim() || null, setProgress);
       onCreated();
     } catch (err: any) {
       setError(err.message ?? 'Failed to create opening');

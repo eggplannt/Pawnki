@@ -28,3 +28,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.iml
+
+# Tooling artifacts
+.playwright-mcp/
+*.tsbuildinfo

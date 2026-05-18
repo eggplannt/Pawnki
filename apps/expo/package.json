@@ -12,8 +12,8 @@
     "gen:types": "supabase gen types typescript --local 2>/dev/null > types/database.types.ts"
   },
   "dependencies": {
-    "@pawntree/shared": "workspace:*",
     "@expo/vector-icons": "^15.0.3",
+    "@pawntree/shared": "workspace:*",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native/js-polyfills": "^0.85.3",
     "@supabase/supabase-js": "^2.105.4",
@@ -38,6 +38,7 @@
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1",
     "react-native-web": "^0.21.0",
     "react-native-worklets": "0.5.1",
     "tailwindcss": "^3",

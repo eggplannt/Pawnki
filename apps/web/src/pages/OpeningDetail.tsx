@@ -4,7 +4,7 @@ import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import Icon from '@mdi/react';
-import { mdiChessKing } from '@mdi/js';
+import { mdiChessKing, mdiDelete } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
 import {
   getOpening, getNodes, buildTree,
@@ -12,6 +12,7 @@ import {
   findTransposition, findIntraOpeningTransposition,
   linkNode, unlinkAndPromote, makeCanonical, absorbCrossCanonical, getTranspositionTargets, getFirstChildId, positionKey,
   importPgnToOpening,
+  IntraLinkConflict,
   type ImportProgress,
   type CrossTranspositionMatch,
   type IntraTranspositionMatch,
@@ -38,6 +39,14 @@ function movePrefix(node: Node, forceNumber: boolean): string {
   return `${moveNum}.`;
 }
 
+function moveSanWithNumber(node: Node): string {
+  if (!node.move_san) return '(start)';
+  const { moveNum, isWhite } = fenInfo(node.fen);
+  return isWhite
+    ? `${moveNum - 1}... ${node.move_san}`
+    : `${moveNum}. ${node.move_san}`;
+}
+
 function isWhiteMove(node: Node): boolean {
   return !fenInfo(node.fen).isWhite;
 }
@@ -54,6 +63,61 @@ function buildParentMap(root: Node): Map<string, Node> {
   return map;
 }
 
+function getPathNodes(node: Node, parentMap: Map<string, Node>): Node[] {
+  const path: Node[] = [];
+  let cur: Node | undefined = node;
+  while (cur) {
+    path.unshift(cur);
+    cur = parentMap.get(cur.id);
+  }
+  return path;
+}
+
+type PathDiff = { src: Node[]; tgt: Node[] };
+
+function computePathDiff(
+  srcNode: Node,
+  tgtNode: Node,
+  parentMap: Map<string, Node>,
+  nodeMap: Map<string, Node>,
+): PathDiff | null {
+  const tgtFull = nodeMap.get(tgtNode.id) ?? tgtNode;
+  const srcPath = getPathNodes(srcNode, parentMap);
+  const tgtPath = getPathNodes(tgtFull, parentMap);
+  if (srcPath.length < 2 || tgtPath.length < 2) return null;
+
+  const srcDecisions = new Map<string, Node>();
+  const tgtDecisions = new Map<string, Node>();
+  for (let i = 0; i + 1 < srcPath.length; i++) {
+    const p = srcPath[i];
+    if ((p.children?.length ?? 0) > 1) srcDecisions.set(p.id, srcPath[i + 1]);
+  }
+  for (let i = 0; i + 1 < tgtPath.length; i++) {
+    const p = tgtPath[i];
+    if ((p.children?.length ?? 0) > 1) tgtDecisions.set(p.id, tgtPath[i + 1]);
+  }
+
+  const srcDiff: Node[] = [];
+  const tgtDiff: Node[] = [];
+  for (const [pid, sTaken] of srcDecisions) {
+    const tTaken = tgtDecisions.get(pid);
+    if (tTaken && tTaken.id !== sTaken.id) {
+      srcDiff.push(sTaken);
+      tgtDiff.push(tTaken);
+    }
+  }
+  if (srcDiff.length === 0) return null;
+
+  const ply = (n: Node) => {
+    const { moveNum, isWhite } = fenInfo(n.fen);
+    return isWhite ? 2 * moveNum - 2 : 2 * moveNum - 1;
+  };
+  return {
+    src: srcDiff.sort((a, b) => ply(a) - ply(b)),
+    tgt: tgtDiff.sort((a, b) => ply(a) - ply(b)),
+  };
+}
+
 function findNodeById(root: Node, id: string): Node | null {
   if (root.id === id) return root;
   for (const child of root.children ?? []) {
@@ -61,6 +125,17 @@ function findNodeById(root: Node, id: string): Node | null {
     if (found) return found;
   }
   return null;
+}
+
+// Returns only the moves that are at branching points plus the final node,
+// giving a compact "signature" that distinguishes paths without showing forced
+// intermediate moves.
+function keyPathMoves(path: Node[]): Node[] {
+  const moves = path.slice(1);
+  return moves.filter((_, i) => {
+    const parent = path[i];
+    return (parent.children?.length ?? 0) > 1 || i === moves.length - 1;
+  });
 }
 
 function countDescendants(node: Node): number {
@@ -123,6 +198,10 @@ function getLegalMoveSquares(fen: string, sourceSquare: string): string[] {
 type LinkTargetInfo = { node: Node; openingId: string; openingName: string; openingColor: 'white' | 'black' };
 const LinkTargetsContext = createContext<Map<string, LinkTargetInfo>>(new Map());
 
+// Threads the set of canonical node ids (nodes targeted by link nodes) so
+// MoveButton can render the ◆ indicator without prop drilling.
+const CanonicalTargetsContext = createContext<Set<string>>(new Set());
+
 // Threads learned-state into MoveButton for the unlearned/learned dot.
 interface LearnedCtx {
   learned: Set<string>;
@@ -144,6 +223,8 @@ export default function OpeningDetail() {
   const [crossSwitch, setCrossSwitch] = useState<{ target: LinkTargetInfo; fromLinkId: string } | null>(null);
   const [startMode, setStartMode] = useState<'learn' | 'practice' | null>(null);
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
+  const [linkConflict, setLinkConflict] = useState<{ conflict: IntraLinkConflict; nodeToDelete: Node } | null>(null);
+  const [swapCanonical, setSwapCanonical] = useState<{ canonicalId: string; linkNodes: Node[] } | null>(null);
   const [opening, setOpening] = useState<Opening | null>(null);
   const [learnedNodeIds, setLearnedNodeIds] = useState<Set<string>>(new Set());
   const [crossLearnedPositionKeys, setCrossLearnedPositionKeys] = useState<Set<string>>(new Set());
@@ -214,9 +295,14 @@ export default function OpeningDetail() {
     return out;
   }, [tree]);
 
+  const canonicalTargetIds = useMemo(
+    () => new Set(linkEntries.map((e) => e.targetId)),
+    [linkEntries],
+  );
+
   // Whenever links change, refresh the target info (one batched fetch).
   useEffect(() => {
-    const targetIds = [...new Set(linkEntries.map((a) => a.targetId))];
+    const targetIds = [...canonicalTargetIds];
     if (targetIds.length === 0) {
       setTransTargets(new Map());
       return;
@@ -384,16 +470,21 @@ export default function OpeningDetail() {
 
   // ── Delete ───────────────────────────────────────────────────────────────
 
-  const handleDeleteNode = useCallback(async (nodeToDelete?: Node) => {
+  const handleDeleteNode = useCallback(async (nodeToDelete?: Node, promotedLinkId?: string) => {
     const target = nodeToDelete ?? currentNode;
     if (!target || !id || !parentMap.has(target.id)) return;
     const parentId = parentMap.get(target.id)!.id;
     setSaving(true);
     try {
-      await deleteSubtree(target.id, id);
-      await reloadTree(parentId);
+      await deleteSubtree(target.id, id, promotedLinkId);
+      setLinkConflict(null);
+      await reloadTree(promotedLinkId ?? parentId);
     } catch (e: any) {
-      setDeleteBlocked(e?.message ?? 'Could not delete this branch.');
+      if (e instanceof IntraLinkConflict) {
+        setLinkConflict({ conflict: e, nodeToDelete: target });
+      } else {
+        setDeleteBlocked(e?.message ?? 'Could not delete this branch.');
+      }
     } finally {
       setSaving(false);
       setContextMenu(null);
@@ -452,20 +543,33 @@ export default function OpeningDetail() {
 
   // ── Legal move highlighting ──────────────────────────────────────────────
 
+  // react-chessboard memoizes its internal dnd-kit handleDragStart with deps
+  // `[currentPosition]`. After a move our currentNode changes but the visible
+  // fen string is unchanged (pendingFen was already showing it), so the dnd-kit
+  // callback never re-captures handlePieceDrag — it keeps the previous closure
+  // and reads a stale currentNode. Route through a ref so the handler is
+  // referentially stable and always reads the latest node.
+  const liveNodeRef = useRef(currentNode);
+  useEffect(() => { liveNodeRef.current = currentNode; }, [currentNode]);
+  const liveColorsRef = useRef(colors);
+  useEffect(() => { liveColorsRef.current = colors; }, [colors]);
+
   const handlePieceDrag = useCallback(({ square }: { isSparePiece: boolean; piece: { pieceType: string }; square: string | null }) => {
-    if (!currentNode || !square) { setHighlightSquares({}); return; }
-    const targets = getLegalMoveSquares(currentNode.fen, square);
+    const node = liveNodeRef.current;
+    const c = liveColorsRef.current;
+    if (!node || !square) { setHighlightSquares({}); return; }
+    const targets = getLegalMoveSquares(node.fen, square);
     const styles: Record<string, React.CSSProperties> = {};
-    styles[square] = { backgroundColor: colors.accent.dim, opacity: 0.6 };
-    const chess = new Chess(currentNode.fen);
+    styles[square] = { backgroundColor: c.accent.dim, opacity: 0.6 };
+    const chess = new Chess(node.fen);
     for (const target of targets) {
       const isCapture = chess.get(target as any);
       styles[target] = isCapture
-        ? { background: `radial-gradient(circle, transparent 55%, ${colors.accent.default} 55%, ${colors.accent.default} 68%, transparent 68%)` }
-        : { background: `radial-gradient(circle, ${colors.accent.default} 25%, transparent 25%)`, opacity: 0.8 };
+        ? { background: `radial-gradient(circle, transparent 55%, ${c.accent.default} 55%, ${c.accent.default} 68%, transparent 68%)` }
+        : { background: `radial-gradient(circle, ${c.accent.default} 25%, transparent 25%)`, opacity: 0.8 };
     }
     setHighlightSquares(styles);
-  }, [currentNode, colors]);
+  }, []);
 
   // ── Board interaction ────────────────────────────────────────────────────
 
@@ -708,9 +812,31 @@ export default function OpeningDetail() {
     }
   }, [transChoice, id, closeTransChoice]);
 
+  const handleSwapCanonical = useCallback(async (linkNodeId: string) => {
+    const s = swapCanonical;
+    if (!s || !id) return;
+    setSaving(true);
+    try {
+      await makeCanonical(id, linkNodeId, s.canonicalId);
+      setSwapCanonical(null);
+      await reloadTree(linkNodeId);
+    } finally {
+      setSaving(false);
+    }
+  }, [swapCanonical, id]);
+
   // Open the choice modal for an existing node (re-prompt the original decision).
   const openTransReprompt = useCallback(async (node: Node) => {
     if (!id || !tree) return;
+
+    // If this node is a canonical (other nodes link to it), show the swap flow.
+    const intraLinksToThis = linkEntries.filter((e) => e.targetId === node.id);
+    if (intraLinksToThis.length > 0) {
+      setContextMenu(null);
+      setSwapCanonical({ canonicalId: node.id, linkNodes: intraLinksToThis.map((e) => e.node) });
+      return;
+    }
+
     const parent = parentMap.get(node.id);
     const parentFen = parent?.fen ?? tree.fen;
     const [intra, cross] = await Promise.all([
@@ -719,7 +845,7 @@ export default function OpeningDetail() {
     ]);
     setContextMenu(null);
     setTransChoice({ newNodeId: node.id, intra, cross, isReprompt: true });
-  }, [id, tree, parentMap]);
+  }, [id, tree, parentMap, linkEntries]);
 
   const handleMoveContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
     if (!parentMap.has(node.id)) return;
@@ -934,7 +1060,7 @@ export default function OpeningDetail() {
               onClick={() => setShowTransPanel(false)}
               className={`text-xs font-medium uppercase tracking-wider transition-colors ${showTransPanel ? 'text-content-muted hover:text-content-secondary' : 'text-content-secondary'}`}
             >
-              <span className="text-accent text-xs mr-1">♟</span>Moves
+              <span className="text-accent text-xs mr-1">♟</span>PGN
             </button>
             <button
               onClick={() => setShowTransPanel(true)}
@@ -960,6 +1086,8 @@ export default function OpeningDetail() {
                 links={linkEntries}
                 targets={transTargets}
                 currentOpeningId={id!}
+                parentMap={parentMap}
+                nodeMap={nodeMap}
                 onGoTo={(n) => { selectNode(n); setShowTransPanel(false); }}
                 onEdit={(n) => { openTransReprompt(n); setShowTransPanel(false); }}
                 onUnlink={async (n) => {
@@ -981,15 +1109,17 @@ export default function OpeningDetail() {
           ) : (
             <div ref={moveListRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 pb-14 min-h-0">
               <LinkTargetsContext.Provider value={transTargets}>
-                <LearnedContext.Provider value={learnedCtxValue}>
-                  <MoveTree
-                    root={tree}
-                    selected={currentNode}
-                    highlightColor={colors.gold.default}
-                    onSelect={selectNode}
-                    onContextMenu={handleMoveContextMenu}
-                  />
-                </LearnedContext.Provider>
+                <CanonicalTargetsContext.Provider value={canonicalTargetIds}>
+                  <LearnedContext.Provider value={learnedCtxValue}>
+                    <MoveTree
+                      root={tree}
+                      selected={currentNode}
+                      highlightColor={colors.gold.default}
+                      onSelect={selectNode}
+                      onContextMenu={handleMoveContextMenu}
+                    />
+                  </LearnedContext.Provider>
+                </CanonicalTargetsContext.Provider>
               </LinkTargetsContext.Provider>
             </div>
           )}
@@ -1001,9 +1131,7 @@ export default function OpeningDetail() {
               className="absolute bottom-3 right-3 w-9 h-9 flex items-center justify-center rounded-full bg-danger text-white hover:brightness-110 transition-all shadow-lg disabled:opacity-50"
               title="Delete selected move (Delete)"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-                <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clipRule="evenodd" />
-              </svg>
+              <Icon path={mdiDelete} size={0.75} />
             </button>
           )}
         </div>
@@ -1048,6 +1176,9 @@ export default function OpeningDetail() {
           ? findNodeById(tree, transChoice.intra.canonicalNodeId)
           : null;
         const reparentCount = oldCanonical ? countDescendants(oldCanonical) : 0;
+        const canonicalHasOtherLinks = !!(transChoice.intra && linkEntries.some(
+          (e) => e.targetId === transChoice.intra!.canonicalNodeId && e.node.id !== transChoice.newNodeId,
+        ));
 
         if (transChoice.isReprompt && !transChoice.intra && !transChoice.cross && !isLinked) {
           return (
@@ -1101,7 +1232,7 @@ export default function OpeningDetail() {
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
             <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-md mx-4 shadow-2xl">
-              <h3 className="text-content-primary font-semibold mb-2">Transposition detected</h3>
+              <h3 className="text-content-primary font-semibold mb-2">{transChoice.isReprompt ? 'Transposition' : 'Transposition detected'}</h3>
               <p className="text-content-secondary text-sm mb-4">
                 {transChoice.intra && transChoice.cross
                   ? <>This position already exists in this opening (via <span className="text-accent font-medium">{transChoice.intra.moveSan ?? '?'}</span>) and in <span className="text-accent font-medium">{transChoice.cross.openingName}</span>.</>
@@ -1118,17 +1249,17 @@ export default function OpeningDetail() {
                     disabled={saving}
                     className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
                   >
-                    <div className="text-content-primary text-sm font-medium">Link to the existing line</div>
-                    <div className="text-content-muted text-xs mt-0.5">This move becomes a link; the original line stays canonical.</div>
+                    <div className="text-content-primary text-sm font-medium">{transChoice.isReprompt ? 'Keep existing link' : 'Link to existing line'}</div>
+                    <div className="text-content-muted text-xs mt-0.5">{transChoice.isReprompt ? 'No change — keep this move linking to the canonical node.' : 'This move becomes a link; the original line stays canonical.'}</div>
                   </button>
                 )}
-                {transChoice.intra && (
+                {transChoice.intra && !canonicalHasOtherLinks && (
                   <button
                     onClick={() => setConfirmCanonical(true)}
                     disabled={saving}
                     className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
                   >
-                    <div className="text-content-primary text-sm font-medium">Make this line the canonical one</div>
+                    <div className="text-content-primary text-sm font-medium">Make this the canonical for this opening</div>
                     <div className="text-content-muted text-xs mt-0.5">
                       {reparentCount > 0
                         ? `Moves ${reparentCount} continuation${reparentCount === 1 ? '' : 's'} onto your current move.`
@@ -1136,7 +1267,7 @@ export default function OpeningDetail() {
                     </div>
                   </button>
                 )}
-                {transChoice.cross && (
+                {transChoice.cross && !transChoice.intra && (
                   <button
                     onClick={handleLinkCross}
                     disabled={saving}
@@ -1146,6 +1277,20 @@ export default function OpeningDetail() {
                       Link to <span className="text-accent">{transChoice.cross.openingName}</span>
                     </div>
                     <div className="text-content-muted text-xs mt-0.5">Next moves jump into that opening's line for this position.</div>
+                  </button>
+                )}
+                {transChoice.cross && !transChoice.intra && !isCrossLink && (
+                  <button
+                    onClick={() => handleAbsorbCross(transChoice.cross!.canonicalNodeId)}
+                    disabled={saving}
+                    className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
+                  >
+                    <div className="text-content-primary text-sm font-medium">
+                      Make this the canonical for all openings
+                    </div>
+                    <div className="text-content-muted text-xs mt-0.5">
+                      <span className="text-accent">{transChoice.cross.openingName}</span> and everything linked to it will be repointed here. Its continuations are merged into this opening.
+                    </div>
                   </button>
                 )}
                 {/* Only allow "keep as a new branching node" when there's no
@@ -1195,10 +1340,15 @@ export default function OpeningDetail() {
                   </div>
                 </button>
               )}
-              {isIntraLink && (
-                <div className="mt-2 px-3 py-2 rounded-lg border border-border bg-bg-base text-content-muted text-xs">
-                  This move links to another line in this opening. Unlinking would create two branching nodes for the same position — pick one of the options above instead (or change which line is canonical).
-                </div>
+              {isIntraLink && node && (
+                <button
+                  onClick={() => { closeTransChoice(); handleDeleteNode(node); }}
+                  disabled={saving}
+                  className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-danger/40 transition-colors disabled:opacity-50 mt-2 w-full"
+                >
+                  <div className="text-danger text-sm font-medium">Delete this position</div>
+                  <div className="text-content-muted text-xs mt-0.5">Remove this link from the opening entirely.</div>
+                </button>
               )}
 
               <button
@@ -1252,6 +1402,44 @@ export default function OpeningDetail() {
         </div>
       )}
 
+      {/* ── Swap-canonical picker ── */}
+      {swapCanonical && opening && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setSwapCanonical(null)}>
+          <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-md mx-4 shadow-2xl w-full" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-content-primary font-semibold mb-2">Swap canonical</h3>
+            <p className="text-content-secondary text-sm mb-4">
+              {swapCanonical.linkNodes.length === 1
+                ? 'One move links to this position.'
+                : `${swapCanonical.linkNodes.length} moves link to this position.`}
+              {' '}Select which should become the canonical path:
+            </p>
+            <p className="text-content-secondary text-xs font-medium uppercase tracking-wider mb-2">{opening.name}</p>
+            <div className="flex flex-col gap-2">
+              {swapCanonical.linkNodes.map((ln) => {
+                const path = getPathNodes(ln, parentMap);
+                const pathStr = keyPathMoves(path).slice(-5).map(moveSanWithNumber).join(' ');
+                return (
+                  <button
+                    key={ln.id}
+                    onClick={() => handleSwapCanonical(ln.id)}
+                    disabled={saving}
+                    className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
+                  >
+                    <div className="text-content-muted text-xs font-mono">{pathStr || ln.move_san || '?'}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setSwapCanonical(null)}
+              className="w-full mt-4 py-2 rounded-lg border border-border text-content-secondary text-sm hover:bg-bg-surface transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Delete-blocked dialog ── */}
       {deleteBlocked && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setDeleteBlocked(null)}>
@@ -1263,6 +1451,45 @@ export default function OpeningDetail() {
               className="w-full py-2 rounded-lg bg-accent/15 text-accent text-sm font-medium hover:bg-accent/25"
             >
               OK
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── IntraLink conflict picker ── */}
+      {linkConflict && opening && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setLinkConflict(null)}>
+          <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-md mx-4 shadow-2xl w-full" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-content-primary font-semibold mb-2">Choose new canonical</h3>
+            <p className="text-content-secondary text-sm mb-4">
+              {linkConflict.conflict.linkNodes.length === 1
+                ? 'One move in this opening links to this position.'
+                : `${linkConflict.conflict.linkNodes.length} moves in this opening link to this position.`}
+              {' '}Select which should become the canonical path:
+            </p>
+            <p className="text-content-secondary text-xs font-medium uppercase tracking-wider mb-2">{opening.name}</p>
+            <div className="flex flex-col gap-2">
+              {linkConflict.conflict.linkNodes.map((ln) => {
+                const lNode = nodeMap.get(ln.id);
+                const path = lNode ? getPathNodes(lNode, parentMap) : [];
+                const pathStr = keyPathMoves(path).slice(-5).map(moveSanWithNumber).join(' ');
+                return (
+                  <button
+                    key={ln.id}
+                    onClick={() => handleDeleteNode(linkConflict.nodeToDelete, ln.id)}
+                    disabled={saving}
+                    className="text-left px-3 py-2 rounded-lg bg-bg-surface border border-border hover:border-accent/40 transition-colors disabled:opacity-50"
+                  >
+                    <div className="text-content-muted text-xs font-mono">{pathStr || ln.move_san || '?'}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setLinkConflict(null)}
+              className="w-full mt-4 py-2 rounded-lg border border-border text-content-secondary text-sm hover:bg-bg-surface transition-colors"
+            >
+              Cancel
             </button>
           </div>
         </div>
@@ -1297,8 +1524,10 @@ export default function OpeningDetail() {
                       : 'bg-bg-surface text-content-muted cursor-not-allowed',
                   ].join(' ')}
                 >
-                  From beginning
-                  <span className="block text-xs opacity-70 mt-0.5">Walk the entire opening</span>
+                  Whole opening
+                  <span className="block text-xs opacity-70 mt-0.5">
+                    {isLearn ? 'Find unlearned positions across all branches' : 'Find practice-ready positions across all branches'}
+                  </span>
                 </button>
                 <button
                   onClick={() => { setStartMode(null); navigate(startUrl(true)); }}
@@ -1317,10 +1546,10 @@ export default function OpeningDetail() {
                       : 'bg-bg-surface text-content-muted cursor-not-allowed',
                   ].join(' ')}
                 >
-                  From this position
+                  This branch only
                   <span className="block text-xs opacity-70 mt-0.5">
                     {fromHereEnabled
-                      ? `Only the subtree below ${currentNode.move_san ?? 'the start'}`
+                      ? `Positions below ${currentNode.move_san ?? 'the start'} only`
                       : isLearn
                         ? 'Nothing left to learn here'
                         : 'Nothing learned here yet'}
@@ -1571,10 +1800,12 @@ function VariationBlock({ node, selected, highlightColor, onSelect, onContextMen
   );
 }
 
-function TranspositionsPanel({ links, targets, currentOpeningId, onGoTo, onEdit, onUnlink, onAbsorb }: {
+function TranspositionsPanel({ links, targets, currentOpeningId, parentMap, nodeMap, onGoTo, onEdit, onUnlink, onAbsorb }: {
   links: { linkId: string; targetId: string; node: Node }[];
   targets: Map<string, LinkTargetInfo>;
   currentOpeningId: string;
+  parentMap: Map<string, Node>;
+  nodeMap: Map<string, Node>;
   onGoTo: (n: Node) => void;
   onEdit: (n: Node) => void;
   onUnlink: (n: Node) => void;
@@ -1587,64 +1818,114 @@ function TranspositionsPanel({ links, targets, currentOpeningId, onGoTo, onEdit,
       </p>
     );
   }
+
+  // Group links by canonical (targetId).
+  const groups = new Map<string, typeof links>();
+  for (const entry of links) {
+    const list = groups.get(entry.targetId) ?? [];
+    list.push(entry);
+    groups.set(entry.targetId, list);
+  }
+
+  const fmt = (nodes: Node[]) =>
+    nodes.slice(0, 2).map(moveSanWithNumber).join(', ') + (nodes.length > 2 ? ` +${nodes.length - 2}` : '');
+
   return (
-    <ul className="flex flex-col gap-2">
-      {links.map(({ linkId, targetId, node }) => {
+    <ul className="flex flex-col gap-3">
+      {Array.from(groups.entries()).map(([targetId, entries]) => {
         const t = targets.get(targetId);
         const isCross = !!(t && t.openingId !== currentOpeningId);
+
+        const canonicalVia = !isCross && t
+          ? (() => {
+              const path = getPathNodes(t.node, parentMap);
+              const km = keyPathMoves(path).slice(0, -1);
+              return km.length ? fmt(km) : null;
+            })()
+          : null;
+
         return (
-          <li key={linkId} className="bg-bg-base border border-border rounded-lg p-3">
-            <div className="flex items-start gap-2">
-              <span className={`mt-0.5 text-sm ${isCross ? 'text-accent' : 'text-gold'}`}>⇄</span>
-              <div className="flex-1 min-w-0">
-                <button
-                  onClick={() => onGoTo(node)}
-                  className="text-left text-content-primary text-sm font-medium hover:text-accent transition-colors truncate block w-full"
-                >
-                  {node.move_san ?? '(start)'}
-                </button>
-                <div className="text-content-muted text-xs mt-0.5 truncate">
-                  {t
-                    ? isCross
-                      ? <>links to <span className="text-accent">{t.openingName}</span> · {t.node.move_san ?? 'start'}</>
-                      : <>links to {t.node.move_san ?? 'start'} in this opening</>
-                    : 'link target missing'}
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2 mt-2">
-              <button
-                onClick={() => onEdit(node)}
-                className="flex-1 min-w-[60px] text-xs py-1 rounded bg-bg-surface border border-border text-content-secondary hover:border-accent/40 transition-colors"
-              >
-                Change
-              </button>
-              {isCross && t && (
-                <button
-                  onClick={() => onAbsorb(node, t.node.id)}
-                  className="flex-1 min-w-[60px] text-xs py-1 rounded bg-bg-surface border border-border text-content-secondary hover:border-accent/40 hover:text-accent transition-colors"
-                  title={`Move ${t.openingName}'s branches into this opening`}
-                >
-                  Absorb
-                </button>
-              )}
-              {isCross ? (
-                <button
-                  onClick={() => onUnlink(node)}
-                  className="flex-1 min-w-[60px] text-xs py-1 rounded bg-bg-surface border border-border text-content-secondary hover:border-danger/40 hover:text-danger transition-colors"
-                  title="Detach this cross-opening link; this node becomes the canonical here."
-                >
-                  Unlink
-                </button>
-              ) : (
-                <span
-                  className="flex-1 min-w-[60px] text-xs py-1 text-content-muted text-center italic"
-                  title="Intra-opening links can't be detached — use Change to pick a different option."
-                >
-                  intra
+          <li key={targetId} className="bg-bg-base border border-border rounded-lg overflow-hidden">
+            {/* Canonical header */}
+            <button
+              onClick={() => t && onGoTo(t.node)}
+              disabled={!t}
+              className={`w-full text-left px-3 pt-2.5 pb-2 transition-colors ${isCross ? 'bg-accent/10 hover:bg-accent/15' : 'bg-gold/[0.08] hover:bg-gold/[0.15]'} disabled:cursor-default`}
+            >
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[0.65em] ${isCross ? 'text-accent' : 'text-gold/60'}`}>◆</span>
+                <span className="text-content-primary text-sm font-medium">
+                  {t ? moveSanWithNumber(t.node) : '…'}
+                  {canonicalVia && (
+                    <span className="text-content-muted font-normal"> via {canonicalVia}</span>
+                  )}
                 </span>
+              </div>
+              {isCross && t && (
+                <p className="text-accent text-xs mt-0.5 ml-4">{t.openingName}</p>
               )}
-            </div>
+            </button>
+
+            {/* Link rows */}
+            {entries.map((entry, idx) => {
+              const diff = !isCross && t ? computePathDiff(entry.node, t.node, parentMap, nodeMap) : null;
+              const linkVia = diff?.src.length
+                ? fmt(diff.src)
+                : isCross
+                  ? (() => {
+                      const km = keyPathMoves(getPathNodes(entry.node, parentMap)).slice(0, -1);
+                      return km.length ? fmt(km) : null;
+                    })()
+                  : null;
+
+              return (
+                <div
+                  key={entry.node.id}
+                  className={`flex items-center gap-2 px-3 py-2${idx < entries.length - 1 ? ' border-b border-border' : ''}`}
+                >
+                  <button
+                    onClick={() => onGoTo(entry.node)}
+                    className="flex-1 text-left text-content-secondary text-sm hover:text-content-primary transition-colors min-w-0"
+                  >
+                    <span>{moveSanWithNumber(entry.node)}</span>
+                    {linkVia && (
+                      <span className="text-content-muted"> via {linkVia}</span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => onEdit(entry.node)}
+                    className="text-xs px-2 py-0.5 rounded bg-bg-surface border border-border text-content-secondary hover:border-accent/40 transition-colors shrink-0"
+                  >
+                    Change
+                  </button>
+                  {isCross && t ? (
+                    <>
+                      <button
+                        onClick={() => onAbsorb(entry.node, t.node.id)}
+                        className="text-xs px-2 py-0.5 rounded bg-bg-surface border border-border text-content-secondary hover:border-accent/40 hover:text-accent transition-colors shrink-0"
+                        title={`Move ${t.openingName}'s branches into this opening`}
+                      >
+                        Absorb
+                      </button>
+                      <button
+                        onClick={() => onUnlink(entry.node)}
+                        className="text-xs px-2 py-0.5 rounded bg-bg-surface border border-border text-content-secondary hover:border-danger/40 hover:text-danger transition-colors shrink-0"
+                        title="Detach this cross-opening link; this node becomes the canonical here."
+                      >
+                        Unlink
+                      </button>
+                    </>
+                  ) : (
+                    <span
+                      className="text-xs text-content-muted italic shrink-0"
+                      title="Intra-opening links can't be detached — use Change to pick a different option."
+                    >
+                      intra
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </li>
         );
       })}
@@ -1662,7 +1943,9 @@ const MoveButton = memo(function MoveButton({ node, selected, onSelect, onContex
   const prefix = movePrefix(node, forceNumber);
   const white = isWhiteMove(node);
   const linkTargets = useContext(LinkTargetsContext);
+  const canonicalTargets = useContext(CanonicalTargetsContext);
   const { learned, userColor, learnableMap } = useContext(LearnedContext);
+  const isCanonical = canonicalTargets.has(node.id);
   // This node is a "prompt" if its position is what the user studies to recall
   // their next move — i.e. one of its children is a learnable, unlearned user move.
   const isPrompt = userColor !== null && (node.children ?? []).some((c) => {
@@ -1677,8 +1960,8 @@ const MoveButton = memo(function MoveButton({ node, selected, onSelect, onContex
     ? undefined
     : target
       ? isCrossLink
-        ? `Links to ${target.openingName} (${target.node.move_san ?? 'start'})`
-        : `Links to this position elsewhere in this opening (${target.node.move_san ?? 'start'})`
+        ? `Links to ${target.openingName} (${moveSanWithNumber(target.node)})`
+        : `Links to a transposition elsewhere in this opening (${moveSanWithNumber(target.node)})`
       : 'Transposition link';
 
   return (
@@ -1718,6 +2001,15 @@ const MoveButton = memo(function MoveButton({ node, selected, onSelect, onContex
             ].join(' ')}
           >
             ⇄
+          </span>
+        )}
+        {isCanonical && (
+          <span
+            aria-hidden
+            title="Other moves link to this position"
+            className="text-[0.6em] leading-none translate-y-[-1px] text-gold/60"
+          >
+            ◆
           </span>
         )}
       </button>
