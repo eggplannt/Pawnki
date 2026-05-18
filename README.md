@@ -1,18 +1,37 @@
 # Pawntree
 
-A full-stack, open-source chess opening trainer with Anki-style spaced repetition. Build opening trees from PGN files, drill them with depth-first practice, and reinforce weak positions with a daily SM-2 review session.
+> **Status: Alpha.** Core features work end-to-end on the web app, but the data model, UI, and APIs are all subject to change. Self-hosting is possible but not yet polished. Don't rely on this for a serious repertoire yet — back up your PGNs.
 
-Licensed under **AGPL-3.0** — self-host for free, forever.
+A chess opening trainer with Anki-style spaced repetition. Build opening trees from PGN files, drill them with depth-first practice, and reinforce weak positions with a daily SM-2 review session.
+
+Licensed under **Apache 2.0**.
 
 ---
 
-## Features
+## Status
 
-- **Opening library** — import PGN files or build trees manually move by move
-- **Practice mode** — depth-first traversal quizzes you on every position in the tree
-- **Daily review** — SM-2 spaced repetition surfaces positions you struggle with
-- **Transposition detection** — warns when a position already exists in another opening
-- **Web-first** — runs in the browser; also targets iOS and Android from the same codebase
+| Surface | State |
+|---|---|
+| Web app (`apps/web`) | **Alpha — primary target.** All phases 1–6 work; Phase 7 (polish + deployment) in progress. |
+| Android (`apps/expo`) | **Experimental.** Feature-parity in progress; ships as an APK on the GitHub Releases page, not to Play Store. iOS is not targeted yet. |
+
+### What works
+
+- Google sign-in via Supabase Auth
+- Opening library: create, import PGN (single or multi-game with auto-merge), delete
+- Tree builder: make moves on the board, edit annotations, navigate variations
+- Transposition detection: same-opening and cross-opening
+- Practice mode: depth-first drill with hints and end-early flow
+- Daily review: SM-2 spaced repetition with quality grades (Missed / Hard / Good / Easy)
+- Streak tracking
+- Light / dark / system themes; 3 board palettes (Wood / Slate / Green); review-order preference
+
+### What's missing
+
+- Hosting story (web deployment + Supabase project provisioning docs)
+- Engine analysis, opening explorer, custom piece sets — not planned for v1
+- Offline mode, Anki export — not planned for v1
+- iOS build
 
 ---
 
@@ -20,86 +39,73 @@ Licensed under **AGPL-3.0** — self-host for free, forever.
 
 | Layer | Choice |
 |---|---|
-| Frontend | Expo (React Native Web), Expo Router, NativeWind / Tailwind CSS |
-| Backend | Go, chi router, pgx/v5 |
-| Database | PostgreSQL 16 |
-| Auth | Google OAuth 2.0, JWT |
-| Deployment | Docker Compose + nginx on a single VPS |
+| Web frontend | Vite + React 19 + TypeScript, Tailwind CSS, React Router v7 |
+| Mobile frontend | Expo SDK 54 + Expo Router, NativeWind |
+| Shared code | `packages/shared` workspace — SM-2, PGN parser, tree ops, theme palettes |
+| Backend | Supabase (Postgres + Auth + RLS) — no separate server |
+| Chess logic | chess.js v1, react-chessboard (web), react-native-chessboard (Expo) |
+| Package manager | Bun |
 
 ---
 
-## Self-Hosting
+## Run Locally
 
 ### Prerequisites
 
-- Docker + Docker Compose
-- A domain with DNS pointed at your server
-- A Google OAuth app ([instructions](#google-oauth-setup))
-- `golang-migrate` CLI (`go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest`)
+- [Bun](https://bun.sh) ≥ 1.0
+- [Supabase CLI](https://supabase.com/docs/guides/cli) for local dev (`brew install supabase/tap/supabase`)
+- Docker (Supabase CLI uses it)
+- A Google OAuth Client ID (only if you want to sign in; see below)
 
-### 1. Clone and configure
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/eggplannt/Pawntree.git
 cd Pawntree
-cp .env.example .env
+bun install
 ```
 
-Edit `.env` and fill in every value. Generate a secure JWT secret:
+### 2. Start Supabase
 
 ```bash
-openssl rand -hex 32
+supabase start
+supabase migration up
 ```
 
-### 2. Google OAuth Setup
+This boots local Postgres + Auth on `127.0.0.1:54321` and applies all migrations.
 
-1. Go to [console.cloud.google.com](https://console.cloud.google.com) → **APIs & Services → Credentials**
+### 3. Configure environment
+
+```bash
+cp apps/web/.env.example apps/web/.env.local       # if you have one; otherwise create it
+```
+
+The web app needs:
+
+```
+VITE_SUPABASE_URL=http://127.0.0.1:54321
+VITE_SUPABASE_PUBLISHABLE_KEY=<sb_publishable_... from `supabase status`>
+```
+
+For Expo, the same values go in `apps/expo/.env.local` as `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
+
+### 4. Google OAuth (optional for local-only testing)
+
+1. [console.cloud.google.com](https://console.cloud.google.com) → **APIs & Services → Credentials**
 2. Create an **OAuth 2.0 Client ID** (Web application)
-3. Add to **Authorized redirect URIs**:
-   - Production: `https://yourdomain.com/api/auth/google/callback`
-   - Local dev: `http://localhost:8080/api/auth/google/callback`
-4. Copy the Client ID and Secret into your `.env`
+3. Add **Authorized redirect URIs** for Supabase's OAuth proxy:
+   - Local: `http://127.0.0.1:54321/auth/v1/callback`
+4. Drop the client ID + secret into `supabase/config.toml` under `[auth.external.google]`, then `supabase stop && supabase start` to pick up changes.
 
-### 3. Run migrations
-
-```bash
-make migrate-up DB_URL="postgres://chess:<password>@localhost:5432/chess_trainer?sslmode=disable"
-```
-
-### 4. Deploy
+### 5. Run the apps
 
 ```bash
-make deploy
+# Web (http://localhost:3000)
+cd apps/web && bun run dev
+
+# Expo (Android — needs an emulator or device)
+cd apps/expo && bun run android
 ```
-
-This builds the Go API, exports the Expo web app, and starts all services via Docker Compose.
-
----
-
-## Local Development
-
-```bash
-# Start PostgreSQL + Go API with hot reload
-make dev
-
-# In a separate terminal — run the Expo web dev server
-cd apps/expo
-npm install
-npx expo start --web
-```
-
-The API runs at `http://localhost:8080` and the frontend at `http://localhost:8081`.
-
-### Makefile targets
-
-| Command | Description |
-|---|---|
-| `make dev` | Start dev stack (Postgres + Go API with air hot reload) |
-| `make migrate-up` | Apply all pending migrations |
-| `make migrate-down` | Roll back the last migration |
-| `make build-web` | Export Expo web app to `apps/expo/dist/` |
-| `make deploy` | Build + export + restart production Docker Compose |
-| `make test` | Run Go tests |
 
 ---
 
@@ -107,47 +113,51 @@ The API runs at `http://localhost:8080` and the frontend at `http://localhost:80
 
 ```
 /
-├── apps/expo/          # Expo app — iOS, Android, Web
-│   ├── app/            # Expo Router file-based routes
-│   ├── components/     # Shared UI components
-│   ├── hooks/          # useAuth, useAppTheme
-│   ├── lib/            # API client, chess helpers, SM-2, PGN parser
-│   └── types/          # TypeScript types mirroring DB schema
-├── server/
-│   ├── cmd/api/        # Entry point
-│   ├── internal/
-│   │   ├── auth/       # JWT issuance + validation
-│   │   ├── db/         # pgx pool + query helpers
-│   │   ├── handlers/   # HTTP handlers
-│   │   ├── middleware/ # Auth, logging
-│   │   └── models/     # Go structs
-│   └── migrations/     # golang-migrate SQL files
-├── nginx/              # nginx config (production)
-├── docker-compose.yml
-├── docker-compose.dev.yml
-└── Makefile
+├── apps/
+│   ├── web/                  # Vite React web app — primary target
+│   │   ├── src/pages/        # Library, OpeningDetail, Review, Settings, …
+│   │   ├── src/components/   # AppShell, Logo, …
+│   │   ├── src/hooks/        # useAuth, useColorTheme, useReviewOrder
+│   │   └── src/lib/          # supabase client wiring
+│   └── expo/                 # Expo Android app — experimental
+│       ├── app/              # Expo Router routes
+│       ├── components/       # Native UI
+│       └── hooks/            # mirrors apps/web/src/hooks
+├── packages/
+│   └── shared/               # Workspace package consumed by both apps
+│       └── src/lib/          # SM-2, PGN parser, openings, reviews, streaks
+├── supabase/
+│   ├── migrations/           # Run with `supabase migration up`
+│   └── config.toml
+└── package.json              # Bun workspaces root
 ```
+
+---
+
+## Android APK
+
+Releases for Android ship as **experimental APKs on the [GitHub Releases page](https://github.com/eggplannt/Pawntree/releases)**, not to the Play Store. Expect rough edges. No automatic updates — re-install when you want the latest.
 
 ---
 
 ## Monetization
 
-The AGPL-3.0 license means anyone can self-host for free but must release modifications. A managed cloud-hosted version (where users pay for convenience) is offered separately. The billing and subscription layer is intentionally kept out of this repository.
+Apache 2.0 means anyone can self-host or fork freely. A managed cloud-hosted version (where users pay for convenience, not for the code) may be offered separately. The billing and subscription layer is intentionally kept out of this repository.
 
 ---
 
 ## Roadmap
 
-- [x] Phase 1 — Repo, database schema, Go API skeleton
-- [x] Phase 2 — Google OAuth, JWT auth, Expo login + auth context
-- [ ] Phase 3 — Opening CRUD, PGN import, transposition detection
-- [ ] Phase 4 — Tree builder (board interaction)
-- [ ] Phase 5 — Practice mode (DFS drill)
-- [ ] Phase 6 — Daily review (SM-2 Anki)
-- [ ] Phase 7 — Polish, settings, production deployment
+- [x] Phase 1 — Repo + database schema
+- [x] Phase 2 — Auth (Supabase + Google OAuth)
+- [x] Phase 3 — Opening CRUD + PGN import + transposition detection
+- [x] Phase 4 — Tree builder (board interaction)
+- [x] Phase 5 — Practice mode (DFS drill)
+- [x] Phase 6 — Daily review (SM-2)
+- [ ] Phase 7 — Polish + deployment (in progress)
 
 ---
 
 ## Contributing
 
-PRs welcome. Please open an issue first for non-trivial changes.
+PRs welcome, but the project is moving fast in alpha and the data model can shift between phases. Open an issue first for non-trivial changes so we don't both write the same code.
