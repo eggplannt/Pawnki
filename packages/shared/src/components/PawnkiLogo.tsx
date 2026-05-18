@@ -36,7 +36,7 @@ interface PawnkiLogoProps {
 
 export function PawnkiLogo({ size = 'md' }: PawnkiLogoProps) {
   const iconSizes = { sm: 20, md: 28, lg: 40, xl: 56 };
-  const textSizes = { sm: 'text-base', md: 'text-xl', lg: 'text-3xl', xl: 'text-5xl' };
+  const textSizes = { sm: 'text-base', md: 'text-xl', lg: 'text-3xl', xl: 'text-8xl' };
   const gaps = { sm: 'gap-1.5', md: 'gap-2', lg: 'gap-3', xl: 'gap-4' };
 
   return (
@@ -44,7 +44,7 @@ export function PawnkiLogo({ size = 'md' }: PawnkiLogoProps) {
       <PawnkiIcon size={iconSizes[size]} />
       <span className={`${textSizes[size]} font-bold tracking-tight`}>
         <span className="text-accent">Pawn</span>
-        <span className="text-gold">tree</span>
+        <span className="text-gold">ki</span>
       </span>
     </div>
   );
