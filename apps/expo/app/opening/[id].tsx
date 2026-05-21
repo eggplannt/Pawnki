@@ -13,7 +13,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
@@ -394,6 +394,18 @@ export default function OpeningDetailScreen() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Refresh learned state when returning from practice (Expo keeps the screen
+  // mounted in the stack, so useEffect([id]) doesn't re-run on back-navigation).
+  const isFirstFocusRef = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (isFirstFocusRef.current) { isFirstFocusRef.current = false; return; }
+      if (!id) return;
+      getLearnedNodeIds(id).catch(() => new Set<string>()).then(setLearnedNodeIds);
+      getCrossOpeningLearnedPositionKeys(id).catch(() => new Set<string>()).then(setCrossLearnedPositionKeys);
+    }, [id]),
+  );
 
   // React to ?node= changes that arrive after initial mount (e.g. navigating
   // back to this opening from the practice screen to inspect a mistake).
