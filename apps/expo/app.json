@@ -2,7 +2,7 @@
   "expo": {
     "name": "Pawnki",
     "slug": "pawnki",
-    "version": "0.1.0",
+    "version": "0.0.1",
     "scheme": "pawnki",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
