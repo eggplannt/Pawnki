@@ -223,6 +223,7 @@ export default function OpeningDetail() {
   // Cross-opening switch confirmation. When non-null, modal is shown.
   const [crossSwitch, setCrossSwitch] = useState<{ target: LinkTargetInfo; fromLinkId: string } | null>(null);
   const [startMode, setStartMode] = useState<'learn' | 'practice' | null>(null);
+  const [randomOrder, setRandomOrder] = useState(false);
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
   const [linkConflict, setLinkConflict] = useState<{ conflict: IntraLinkConflict; nodeToDelete: Node } | null>(null);
   const [swapCanonical, setSwapCanonical] = useState<{ canonicalId: string; linkNodes: Node[] } | null>(null);
@@ -1557,12 +1558,23 @@ export default function OpeningDetail() {
           : 'bg-gold/15 text-gold hover:bg-gold/25';
         const title = isLearn ? 'Learn unlearned positions' : 'Practice learned positions';
         const startUrl = (fromCurrent: boolean) =>
-          `/practice/${id}?mode=${startMode}${fromCurrent && currentNode.id !== tree.id ? `&from=${currentNode.id}` : ''}`;
+          `/practice/${id}?mode=${startMode}${fromCurrent && currentNode.id !== tree.id ? `&from=${currentNode.id}` : ''}${!isLearn && randomOrder ? '&random=1' : ''}`;
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setStartMode(null)}>
             <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-sm mx-4 shadow-2xl w-full" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-content-primary font-semibold mb-1">{title}</h3>
               <p className="text-content-muted text-sm mb-4">Where do you want to start?</p>
+              {!isLearn && (
+                <label className="flex items-center gap-2 mb-4 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={randomOrder}
+                    onChange={(e) => setRandomOrder(e.target.checked)}
+                    className="w-4 h-4 rounded accent-gold"
+                  />
+                  <span className="text-content-secondary text-sm">Random order</span>
+                </label>
+              )}
               <div className="flex flex-col gap-2">
                 <button
                   onClick={() => { setStartMode(null); navigate(startUrl(false)); }}

@@ -227,6 +227,7 @@ export default function OpeningDetailScreen() {
   const [learnedNodeIds, setLearnedNodeIds] = useState<Set<string>>(new Set());
   const [crossLearnedPositionKeys, setCrossLearnedPositionKeys] = useState<Set<string>>(new Set());
   const [startMode, setStartMode] = useState<'learn' | 'practice' | null>(null);
+  const [randomOrder, setRandomOrder] = useState(false);
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
   const [linkConflict, setLinkConflict] = useState<IntraLinkConflict | null>(null);
   const [swapCanonical, setSwapCanonical] = useState<{ canonicalId: string; linkNodes: Node[] } | null>(null);
@@ -1072,6 +1073,7 @@ export default function OpeningDetailScreen() {
               id,
               mode: startMode,
               ...(fromCurrent && currentNode.id !== tree.id ? { from: currentNode.id } : {}),
+              ...(!isLearn && randomOrder ? { random: '1' } : {}),
             },
           });
           return (
@@ -1081,6 +1083,20 @@ export default function OpeningDetailScreen() {
                   {isLearn ? 'Learn unlearned positions' : 'Practice learned positions'}
                 </Text>
                 <Text className="text-content-muted text-sm mb-4">Where do you want to start?</Text>
+                {!isLearn && (
+                  <Pressable
+                    onPress={() => setRandomOrder((v) => !v)}
+                    className="flex-row items-center justify-between mb-4"
+                  >
+                    <Text className="text-content-secondary text-sm">Random order</Text>
+                    <Switch
+                      value={randomOrder}
+                      onValueChange={setRandomOrder}
+                      trackColor={{ true: colorTheme.accent.default }}
+                      thumbColor={colorTheme.content.primary}
+                    />
+                  </Pressable>
+                )}
                 <View className="gap-2">
                   <Pressable
                     onPress={() => {

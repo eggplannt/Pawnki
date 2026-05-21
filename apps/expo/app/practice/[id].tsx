@@ -84,10 +84,11 @@ function findNodeById(root: Node, id: string): Node | null {
 
 export default function PracticeScreen() {
   const { colors: colorTheme } = useColorTheme();
-  const params = useLocalSearchParams<{ id: string; mode?: string; from?: string }>();
+  const params = useLocalSearchParams<{ id: string; mode?: string; from?: string; random?: string }>();
   const id = params.id;
   const mode = (params.mode as PracticeMode) ?? 'learn';
   const fromNodeId = params.from;
+  const randomizeOrder = params.random === '1';
   const router = useRouter();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
@@ -128,14 +129,14 @@ export default function PracticeScreen() {
         if (!tree) { setError('Opening has no moves yet.'); setLoading(false); return; }
         const rootNode = fromNodeId ? findNodeById(tree, fromNodeId) ?? tree : tree;
         setOpening(op);
-        setSession(startSession({ mode, userColor: op.color, rootNode, learnedNodeIds: learned }));
+        setSession(startSession({ mode, userColor: op.color, rootNode, learnedNodeIds: learned, randomizeOrder }));
         setLoading(false);
       } catch (e: any) {
         if (!cancelled) { setError(e?.message ?? 'Failed to start'); setLoading(false); }
       }
     })();
     return () => { cancelled = true; };
-  }, [id, mode, fromNodeId, reloadKey]);
+  }, [id, mode, fromNodeId, randomizeOrder, reloadKey]);
 
   // ── Banner ────────────────────────────────────────────────────────────────
 

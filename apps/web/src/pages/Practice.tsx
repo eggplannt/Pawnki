@@ -96,6 +96,7 @@ export default function Practice() {
 
   const mode = (searchParams.get('mode') as PracticeMode) ?? 'learn';
   const fromNodeId = searchParams.get('from');
+  const randomizeOrder = searchParams.get('random') === '1';
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -143,6 +144,7 @@ export default function Practice() {
           userColor: op.color,
           rootNode,
           learnedNodeIds: learnedSet,
+          randomizeOrder,
         });
         setSession(newSession);
         setLoading(false);
@@ -152,7 +154,7 @@ export default function Practice() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, mode, fromNodeId, reloadKey]);
+  }, [id, mode, fromNodeId, randomizeOrder, reloadKey]);
 
   // ── Banner helper ────────────────────────────────────────────────────────
 

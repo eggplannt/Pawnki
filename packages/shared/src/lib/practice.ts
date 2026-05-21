@@ -88,6 +88,8 @@ export interface PracticeOptions {
   learnedNodeIds: Set<string>;
   /** First-child auto-play for opponent (true) vs random (false). Default true. */
   opponentPicksFirst?: boolean;
+  /** Shuffle the order positions are drilled each session. */
+  randomizeOrder?: boolean;
 }
 
 export interface PracticeMistake {
@@ -98,6 +100,8 @@ export interface PracticeMistake {
 
 export interface PracticeSession {
   options: PracticeOptions;
+  /** Per-node ordered children ids — shuffled at session start when randomizeOrder is on. */
+  childOrderMap: Map<string, string[]>;
   /** Position the user is currently looking at. */
   currentNode: Node;
   /** Subtree-root ids whose DFS has been completed this session — skipped on backtrack. */
@@ -201,6 +205,26 @@ function collectIds(root: Node, out: Set<string>) {
   for (const c of root.children ?? []) collectIds(c, out);
 }
 
+function shuffle<T>(arr: T[]): T[] {
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+function buildChildOrderMap(root: Node, randomize: boolean): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  function walk(n: Node) {
+    const ids = (n.children ?? []).map((c) => c.id);
+    map.set(n.id, randomize ? shuffle(ids) : ids);
+    for (const c of n.children ?? []) walk(c);
+  }
+  walk(root);
+  return map;
+}
+
 // ── Session lifecycle ───────────────────────────────────────────────────────
 
 export function startSession(opts: PracticeOptions): PracticeSession {
@@ -214,10 +238,12 @@ export function startSession(opts: PracticeOptions): PracticeSession {
   );
   const inScopeIds = new Set<string>();
   collectIds(opts.rootNode, inScopeIds);
+  const childOrderMap = buildChildOrderMap(opts.rootNode, opts.randomizeOrder ?? false);
 
   const total = applicableCounts.get(opts.rootNode.id) ?? 0;
   const session: PracticeSession = {
     options: opts,
+    childOrderMap,
     currentNode: opts.rootNode,
     practicedChildIds: new Set(),
     firstTryCorrect: new Set(),
@@ -251,28 +277,24 @@ function nextStatus(
  * filtering and excluding already-practiced subtrees this session.
  */
 export function applicableChildren(session: PracticeSession): Node[] {
-  const { currentNode, options, applicableCounts, practicedChildIds, learnableMap } = session;
-  const children = currentNode.children ?? [];
+  const { currentNode, options, applicableCounts, practicedChildIds, learnableMap, childOrderMap } = session;
+  const childById = new Map((currentNode.children ?? []).map((c) => [c.id, c]));
+  const orderedIds = childOrderMap.get(currentNode.id) ?? (currentNode.children ?? []).map((c) => c.id);
   const userIsToMove = fenSide(currentNode.fen) === options.userColor;
-  return children.filter((c) => {
-    if (practicedChildIds.has(c.id)) return false;
+  return orderedIds.flatMap((id) => {
+    const c = childById.get(id);
+    if (!c) return [];
+    if (practicedChildIds.has(c.id)) return [];
     if (userIsToMove) {
       if (options.mode === 'learn') {
-        // Allow walking through any child whose subtree still has unlearned
-        // learnables — even branching choices, so we can reach learnables below.
-        return (applicableCounts.get(c.id) ?? 0) > 0;
+        return (applicableCounts.get(c.id) ?? 0) > 0 ? [c] : [];
       } else {
         const learnable = learnableMap.get(c.id) ?? false;
-        if (learnable) {
-          // Unique-response: child must be the learned answer.
-          return options.learnedNodeIds.has(c.id);
-        }
-        // Branching: any branch is a valid practice choice.
-        return (applicableCounts.get(c.id) ?? 0) > 0;
+        if (learnable) return options.learnedNodeIds.has(c.id) ? [c] : [];
+        return (applicableCounts.get(c.id) ?? 0) > 0 ? [c] : [];
       }
     } else {
-      // Opponent move — engine plays it; prune if subtree has no applicable nodes.
-      return (applicableCounts.get(c.id) ?? 0) > 0;
+      return (applicableCounts.get(c.id) ?? 0) > 0 ? [c] : [];
     }
   });
 }
@@ -476,7 +498,12 @@ export function backtrack(session: PracticeSession): PracticeSession {
   practiced.add(session.currentNode.id);
   for (let i = path.length - 2; i >= 0; i--) {
     const ancestor = path[i];
-    const candidates = (ancestor.children ?? []).filter((c) => !practiced.has(c.id) && isApplicableChild(session, ancestor, c));
+    const childById = new Map((ancestor.children ?? []).map((c) => [c.id, c]));
+    const orderedIds = session.childOrderMap.get(ancestor.id) ?? (ancestor.children ?? []).map((c) => c.id);
+    const candidates = orderedIds.flatMap((id) => {
+      const c = childById.get(id);
+      return c && !practiced.has(c.id) && isApplicableChild(session, ancestor, c) ? [c] : [];
+    });
     if (candidates.length > 0) {
       return {
         ...session,
