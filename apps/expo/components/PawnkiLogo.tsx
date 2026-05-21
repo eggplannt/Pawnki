@@ -24,7 +24,7 @@ export function PawnkiLogo({ size = 'md', accentColor, goldColor }: Props) {
       />
       <Text style={{ fontSize: TEXT_SIZES[size], fontWeight: 'bold', letterSpacing: -0.5 }}>
         <Text style={{ color: accentColor }}>Pawn</Text>
-        <Text style={{ color: goldColor }}>tree</Text>
+        <Text style={{ color: goldColor }}>ki</Text>
       </Text>
     </View>
   );

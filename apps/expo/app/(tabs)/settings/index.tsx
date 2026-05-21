@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, Pressable, ScrollView, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, Pressable, ScrollView, Modal, TextInput, KeyboardAvoidingView, Platform, Linking } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/hooks/useAuth';
@@ -128,9 +128,16 @@ export default function SettingsScreen() {
 
         <Pressable
           onPress={signOut}
-          className="items-center justify-center bg-bg-elevated border border-border rounded-xl h-12 active:opacity-70"
+          className="items-center justify-center bg-bg-elevated border border-border rounded-xl h-12 active:opacity-70 mb-3"
         >
           <Text className="text-content-primary font-medium text-base">Sign out</Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => Linking.openURL('https://pawnki.com/privacy.html')}
+          className="items-center justify-center active:opacity-70"
+        >
+          <Text className="text-content-muted text-sm underline">Privacy Policy</Text>
         </Pressable>
 
         {/* Danger zone */}

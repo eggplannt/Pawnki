@@ -90,7 +90,11 @@ export default function Login() {
             </button>
 
             <p className="text-content-muted text-xs text-center mt-6 leading-5">
-              By signing in you agree to the terms of service.
+              By signing in you agree to our{' '}
+              <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="underline hover:text-content-secondary transition-colors">
+                Privacy Policy
+              </a>
+              .
             </p>
           </div>
         </div>
