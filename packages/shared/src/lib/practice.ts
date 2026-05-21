@@ -100,8 +100,13 @@ export interface PracticeMistake {
 
 export interface PracticeSession {
   options: PracticeOptions;
-  /** Per-node ordered children ids — shuffled at session start when randomizeOrder is on. */
+  /** Per-node ordered children ids — used by DFS traversal. */
   childOrderMap: Map<string, string[]>;
+  /** When randomizeOrder=true && mode=practice: shuffled flat queue of
+   *  {parent, child} pairs to quiz. null = normal DFS mode. */
+  randomQueue: Array<{ parent: Node; child: Node }> | null;
+  /** Current index into randomQueue. */
+  randomQueueIndex: number;
   /** Position the user is currently looking at. */
   currentNode: Node;
   /** Subtree-root ids whose DFS has been completed this session — skipped on backtrack. */
@@ -214,15 +219,40 @@ function shuffle<T>(arr: T[]): T[] {
   return out;
 }
 
-function buildChildOrderMap(root: Node, randomize: boolean): Map<string, string[]> {
+function buildChildOrderMap(root: Node): Map<string, string[]> {
   const map = new Map<string, string[]>();
   function walk(n: Node) {
-    const ids = (n.children ?? []).map((c) => c.id);
-    map.set(n.id, randomize ? shuffle(ids) : ids);
+    map.set(n.id, (n.children ?? []).map((c) => c.id));
     for (const c of n.children ?? []) walk(c);
   }
   walk(root);
   return map;
+}
+
+/**
+ * Collect every applicable user-move node as a {parent, child} pair, in DFS
+ * order. The parent is the node whose FEN is shown on the board; the child is
+ * the move the user needs to play.
+ */
+function collectPracticeQueueWithParents(
+  root: Node,
+  userColor: 'white' | 'black',
+  applicableCounts: Map<string, number>,
+): Array<{ parent: Node; child: Node }> {
+  const result: Array<{ parent: Node; child: Node }> = [];
+  function walk(parent: Node, n: Node) {
+    if (isUserMove(n, userColor)) {
+      if ((applicableCounts.get(n.id) ?? 0) > 0) {
+        result.push({ parent, child: n });
+        for (const c of n.children ?? []) walk(n, c);
+      }
+      // count===0 → unlearned unique-response: stop this branch
+    } else {
+      for (const c of n.children ?? []) walk(n, c);
+    }
+  }
+  for (const c of root.children ?? []) walk(root, c);
+  return result;
 }
 
 // ── Session lifecycle ───────────────────────────────────────────────────────
@@ -238,13 +268,22 @@ export function startSession(opts: PracticeOptions): PracticeSession {
   );
   const inScopeIds = new Set<string>();
   collectIds(opts.rootNode, inScopeIds);
-  const childOrderMap = buildChildOrderMap(opts.rootNode, opts.randomizeOrder ?? false);
+  const childOrderMap = buildChildOrderMap(opts.rootNode);
 
-  const total = applicableCounts.get(opts.rootNode.id) ?? 0;
+  const useRandomQueue = (opts.randomizeOrder ?? false) && opts.mode === 'practice';
+  const randomQueue = useRandomQueue
+    ? shuffle(collectPracticeQueueWithParents(opts.rootNode, opts.userColor, applicableCounts))
+    : null;
+
+  const total = randomQueue ? randomQueue.length : (applicableCounts.get(opts.rootNode.id) ?? 0);
+  const initialNode = randomQueue && randomQueue.length > 0 ? randomQueue[0].parent : opts.rootNode;
+
   const session: PracticeSession = {
     options: opts,
     childOrderMap,
-    currentNode: opts.rootNode,
+    randomQueue,
+    randomQueueIndex: 0,
+    currentNode: initialNode,
     practicedChildIds: new Set(),
     firstTryCorrect: new Set(),
     requeueEntries: [],
@@ -258,7 +297,7 @@ export function startSession(opts: PracticeOptions): PracticeSession {
     completedApplicable: 0,
     hintLevel: 0,
     wrongAttemptsHere: 0,
-    status: total === 0 ? 'complete' : nextStatus(opts.rootNode, opts.userColor),
+    status: total === 0 ? 'complete' : (randomQueue ? 'awaiting-user' : nextStatus(opts.rootNode, opts.userColor)),
   };
   return session;
 }
@@ -277,6 +316,14 @@ function nextStatus(
  * filtering and excluding already-practiced subtrees this session.
  */
 export function applicableChildren(session: PracticeSession): Node[] {
+  // Random queue mode: only the specific queued child is "applicable" at this position.
+  if (session.randomQueue !== null) {
+    const item = session.randomQueue[session.randomQueueIndex];
+    if (!item) return [];
+    const child = (session.currentNode.children ?? []).find((c) => c.id === item.child.id);
+    return child ? [child] : [];
+  }
+
   const { currentNode, options, applicableCounts, practicedChildIds, learnableMap, childOrderMap } = session;
   const childById = new Map((currentNode.children ?? []).map((c) => [c.id, c]));
   const orderedIds = childOrderMap.get(currentNode.id) ?? (currentNode.children ?? []).map((c) => c.id);
@@ -328,6 +375,47 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
   if (session.status !== 'awaiting-user') {
     return { session, verdict: 'wrong', reason: 'Not your turn.' };
   }
+
+  // ── Random queue mode ────────────────────────────────────────────────────
+  if (session.randomQueue !== null) {
+    const item = session.randomQueue[session.randomQueueIndex];
+    if (!item) return { session, verdict: 'wrong', reason: 'Session complete.' };
+    const expectedSan = item.child.move_san ?? '';
+    if (san !== expectedSan) {
+      const mistake: PracticeMistake = {
+        nodeId: session.currentNode.id,
+        attemptedSan: san,
+        expectedSans: expectedSan ? [expectedSan] : [],
+      };
+      return {
+        session: { ...session, wrongAttemptsHere: session.wrongAttemptsHere + 1, mistakes: [...session.mistakes, mistake] },
+        verdict: 'wrong',
+        reason: 'Wrong move.',
+      };
+    }
+    // Correct — advance to child, then opponentMove will jump to next queued parent.
+    let firstTry = session.firstTryCorrect;
+    let completed = session.completedApplicable;
+    if (!firstTry.has(item.child.id)) {
+      firstTry = new Set(firstTry);
+      firstTry.add(item.child.id);
+      completed += 1;
+    }
+    return {
+      session: {
+        ...session,
+        currentNode: item.child,
+        firstTryCorrect: firstTry,
+        completedApplicable: completed,
+        wrongAttemptsHere: 0,
+        hintLevel: 0,
+        status: 'opponent-to-move', // 300ms pause shows the move result, then opponentMove advances
+      },
+      verdict: 'correct',
+      target: item.child,
+    };
+  }
+
   const all = session.currentNode.children ?? [];
   const match = all.find((c) => c.move_san === san);
   if (!match) {
@@ -465,6 +553,27 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
 /** Advance one opponent move. Returns the new session + the played node. */
 export function opponentMove(session: PracticeSession): { session: PracticeSession; played: Node | null } {
   if (session.status !== 'opponent-to-move') return { session, played: null };
+
+  // Random queue mode: jump to the next queued parent instead of playing an opponent move.
+  if (session.randomQueue !== null) {
+    const nextIndex = session.randomQueueIndex + 1;
+    if (nextIndex >= session.randomQueue.length) {
+      return { session: { ...session, status: 'complete' }, played: null };
+    }
+    const nextItem = session.randomQueue[nextIndex];
+    return {
+      session: {
+        ...session,
+        currentNode: nextItem.parent,
+        randomQueueIndex: nextIndex,
+        hintLevel: 0,
+        wrongAttemptsHere: 0,
+        status: 'awaiting-user',
+      },
+      played: null,
+    };
+  }
+
   const allowed = applicableChildren(session);
   if (allowed.length === 0) return { session: backtrack(session), played: null };
   const pick = session.options.opponentPicksFirst === false
