@@ -244,6 +244,39 @@ export interface ReviewStats {
   retention: number | null;
 }
 
+/**
+ * Delete all review_cards rows for nodes belonging to the given opening,
+ * resetting the opening to "unlearned" state.
+ */
+export async function unlearnPositionsForOpening(openingId: string): Promise<void> {
+  const { data: nodes, error: nErr } = await getDb()
+    .from('nodes')
+    .select('id')
+    .eq('opening_id', openingId);
+  if (nErr) throw nErr;
+  if (!nodes || nodes.length === 0) return;
+  const nodeIds = (nodes as Array<{ id: string }>).map((n) => n.id);
+  const { error } = await getDb()
+    .from('review_cards')
+    .delete()
+    .in('node_id', nodeIds);
+  if (error) throw error;
+}
+
+/**
+ * Delete review_cards rows for specific node ids. No-op for ids that have no
+ * row. Used to auto-unlearn positions that are no longer uniquely learnable
+ * (e.g. when a second correct solution is added at a branching point).
+ */
+export async function unlearnNodeIds(nodeIds: string[]): Promise<void> {
+  if (nodeIds.length === 0) return;
+  const { error } = await getDb()
+    .from('review_cards')
+    .delete()
+    .in('node_id', nodeIds);
+  if (error) throw error;
+}
+
 export async function getReviewStats(): Promise<ReviewStats> {
   const today = todayYmd();
   const db = getDb();

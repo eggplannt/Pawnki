@@ -33,10 +33,19 @@ export function computeLearnableMap(
 ): Map<string, boolean> {
   const out = new Map<string, boolean>();
   function walk(n: Node) {
-    const userKids = (n.children ?? []).filter((c) => isUserMove(c, userColor));
+    // Link nodes (transposes_to_node_id != null) are excluded from the uniqueness
+    // check — they're alternative paths to a position already covered by the
+    // canonical branch and must not inflate the user-move count.
+    const userKids = (n.children ?? []).filter(
+      (c) => isUserMove(c, userColor) && !c.transposes_to_node_id,
+    );
     const unique = userKids.length === 1;
     for (const c of n.children ?? []) {
-      out.set(c.id, isUserMove(c, userColor) ? unique : false);
+      if (c.transposes_to_node_id) {
+        out.set(c.id, false); // link nodes are never independently learnable
+      } else {
+        out.set(c.id, isUserMove(c, userColor) ? unique : false);
+      }
       walk(c);
     }
   }
@@ -272,7 +281,10 @@ export function startSession(opts: PracticeOptions): PracticeSession {
 
   const useRandomQueue = (opts.randomizeOrder ?? false) && opts.mode === 'practice';
   const randomQueue = useRandomQueue
-    ? shuffle(collectPracticeQueueWithParents(opts.rootNode, opts.userColor, applicableCounts))
+    ? shuffle(
+        collectPracticeQueueWithParents(opts.rootNode, opts.userColor, applicableCounts)
+          .filter(({ child }) => learnableMap.get(child.id) ?? false),
+      )
     : null;
 
   const total = randomQueue ? randomQueue.length : (applicableCounts.get(opts.rootNode.id) ?? 0);
@@ -317,12 +329,12 @@ function nextStatus(
  */
 export function applicableChildren(session: PracticeSession): Node[] {
   // Random queue mode: only the specific queued child is "applicable" at this position.
-  if (session.randomQueue !== null) {
-    const item = session.randomQueue[session.randomQueueIndex];
-    if (!item) return [];
-    const child = (session.currentNode.children ?? []).find((c) => c.id === item.child.id);
-    return child ? [child] : [];
-  }
+  // if (session.randomQueue !== null) {
+  //   const item = session.randomQueue[session.randomQueueIndex];
+  //   if (!item) return [];
+  //   const child = (session.currentNode.children ?? []).find((c) => c.id === item.child.id);
+  //   return child ? [child] : [];
+  // }
 
   const { currentNode, options, applicableCounts, practicedChildIds, learnableMap, childOrderMap } = session;
   const childById = new Map((currentNode.children ?? []).map((c) => [c.id, c]));
@@ -394,9 +406,16 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
       };
     }
     // Correct — advance to child, then opponentMove will jump to next queued parent.
+    const taintedRQ = session.wrongAttemptsHere > 0 || session.hintLevel > 0;
     let firstTry = session.firstTryCorrect;
     let completed = session.completedApplicable;
-    if (!firstTry.has(item.child.id)) {
+    let randomQueue = session.randomQueue!;
+    let totalApplicable = session.totalApplicable;
+    if (taintedRQ) {
+      // Requeue at end for another attempt without counting as done yet.
+      randomQueue = [...randomQueue, item];
+      totalApplicable += 1;
+    } else if (!firstTry.has(item.child.id)) {
       firstTry = new Set(firstTry);
       firstTry.add(item.child.id);
       completed += 1;
@@ -405,8 +424,10 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
       session: {
         ...session,
         currentNode: item.child,
+        randomQueue,
         firstTryCorrect: firstTry,
         completedApplicable: completed,
+        totalApplicable,
         wrongAttemptsHere: 0,
         hintLevel: 0,
         status: 'opponent-to-move', // 300ms pause shows the move result, then opponentMove advances
@@ -419,6 +440,7 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
   const all = session.currentNode.children ?? [];
   const match = all.find((c) => c.move_san === san);
   if (!match) {
+
     const mistake: PracticeMistake = {
       nodeId: session.currentNode.id,
       attemptedSan: san,
@@ -474,11 +496,13 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
     const queue = session.requeueEntries.slice(1); // drop the entry we just answered
     let firstTry = session.firstTryCorrect;
     let completed = session.completedApplicable;
-    if (wasFirstTry && wasApplicableSelf && !firstTry.has(match.id)) {
+    const isPracticeRequeue = session.options.mode === 'practice';
+    const taintedRequeue = !wasFirstTry || (isPracticeRequeue && session.hintLevel > 0);
+    if (!taintedRequeue && wasApplicableSelf && !firstTry.has(match.id)) {
       firstTry = new Set(firstTry);
       firstTry.add(match.id);
       completed += 1;
-    } else if (!wasFirstTry && wasApplicableSelf) {
+    } else if (taintedRequeue && wasApplicableSelf) {
       // Tainted again — re-queue at end so they get another shot.
       queue.push({ parentId: session.currentNode.id, childId: match.id });
     }
@@ -517,22 +541,17 @@ export function attemptMove(session: PracticeSession, san: string): AttemptResul
   let completed = session.completedApplicable;
   let queue = session.requeueEntries;
   if (isUserMove(match, session.options.userColor) && wasApplicableSelf) {
-    if (wasFirstTry) {
+    const isPracticeMain = session.options.mode === 'practice';
+    // Practice mode: tainted by mistake OR hint. Learn mode: tainted by mistake only.
+    const shouldRequeue = !wasFirstTry || (isPracticeMain && session.hintLevel > 0);
+    if (!shouldRequeue) {
       if (!firstTry.has(match.id)) {
         firstTry = new Set(firstTry);
         firstTry.add(match.id);
         completed += 1;
       }
-    } else if (session.options.mode === 'learn') {
-      // Learn mode: tainted by a wrong attempt → queue for re-prompt at end.
-      queue = [...queue, { parentId: session.currentNode.id, childId: match.id }];
     } else {
-      // Practice mode: count as completed even with prior wrong attempts.
-      if (!firstTry.has(match.id)) {
-        firstTry = new Set(firstTry);
-        firstTry.add(match.id);
-        completed += 1;
-      }
+      queue = [...queue, { parentId: session.currentNode.id, childId: match.id }];
     }
   }
   const advanced: PracticeSession = {

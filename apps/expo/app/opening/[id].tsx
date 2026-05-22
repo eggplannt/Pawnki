@@ -38,6 +38,10 @@ import {
   computeApplicableCounts,
   computeLearnableMap,
   augmentLearnedWithTranspositions,
+  unlearnPositionsForOpening,
+  unlearnNodeIds,
+  fenSide,
+  isUserMove,
   type Opening,
   type Node,
 } from '@pawnki/shared';
@@ -153,6 +157,12 @@ function findNodeById(root: Node, id: string): Node | null {
   return null;
 }
 
+function collectSubtreeIds(node: Node): string[] {
+  const ids = [node.id];
+  for (const c of node.children ?? []) ids.push(...collectSubtreeIds(c));
+  return ids;
+}
+
 interface LinkEntry {
   node: Node;
   targetId: string;
@@ -226,8 +236,10 @@ export default function OpeningDetailScreen() {
   const [currentHasTrans, setCurrentHasTrans] = useState(false);
   const [learnedNodeIds, setLearnedNodeIds] = useState<Set<string>>(new Set());
   const [crossLearnedPositionKeys, setCrossLearnedPositionKeys] = useState<Set<string>>(new Set());
-  const [startMode, setStartMode] = useState<'learn' | 'practice' | null>(null);
+  const [startMode, setStartMode] = useState<'learn' | 'practice' | 'unlearn' | null>(null);
   const [randomOrder, setRandomOrder] = useState(false);
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  const [nodeActionMenu, setNodeActionMenu] = useState<Node | null>(null);
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
   const [linkConflict, setLinkConflict] = useState<IntraLinkConflict | null>(null);
   const [swapCanonical, setSwapCanonical] = useState<{ canonicalId: string; linkNodes: Node[] } | null>(null);
@@ -570,10 +582,33 @@ export default function OpeningDetailScreen() {
         .filter((s): s is string => !!s),
       move.san,
     ];
+
+    // If the parent is a user-decision position with exactly one existing
+    // non-link user-move child, adding this second move makes the first one
+    // no longer uniquely learnable — auto-unlearn it.
+    const existingUniqueKidIds =
+      fenSide(currentNode.fen) === opening.color
+        ? (currentNode.children ?? [])
+            .filter((c) => isUserMove(c, opening.color) && !c.transposes_to_node_id)
+            .map((c) => c.id)
+        : [];
+    const shouldAutoUnlearn = existingUniqueKidIds.length === 1;
+
     setSaving(true);
     try {
       const newNode = await createNode(id, parentId, move.san, move.uci, newFen);
+      if (shouldAutoUnlearn) {
+        await unlearnNodeIds(existingUniqueKidIds);
+      }
       await reloadTree(newNode.id);
+      if (shouldAutoUnlearn) {
+        const [learned, crossKeys] = await Promise.all([
+          getLearnedNodeIds(id).catch(() => new Set<string>()),
+          getCrossOpeningLearnedPositionKeys(id).catch(() => new Set<string>()),
+        ]);
+        setLearnedNodeIds(learned);
+        setCrossLearnedPositionKeys(crossKeys);
+      }
 
       const intra = await findIntraOpeningTransposition(newFen, id, newNode.id);
       const cross = intra ? [] : await findTransposition(newFen, id, userPathSans);
@@ -797,6 +832,48 @@ export default function OpeningDetailScreen() {
     }
   }, [annotationDraft, currentNode, id, reloadTree]);
 
+  // ── Unlearn ──────────────────────────────────────────────────────────────
+
+  const handleUnlearnScope = useCallback(async (scope: 'all' | 'subtree' | 'node') => {
+    if (!id || !currentNode) return;
+    setSaving(true);
+    try {
+      if (scope === 'all') {
+        await unlearnPositionsForOpening(id);
+      } else if (scope === 'subtree') {
+        await unlearnNodeIds(collectSubtreeIds(currentNode));
+      } else {
+        await unlearnNodeIds([currentNode.id]);
+      }
+      const [learned, crossKeys] = await Promise.all([
+        getLearnedNodeIds(id).catch(() => new Set<string>()),
+        getCrossOpeningLearnedPositionKeys(id).catch(() => new Set<string>()),
+      ]);
+      setLearnedNodeIds(learned);
+      setCrossLearnedPositionKeys(crossKeys);
+    } finally {
+      setSaving(false);
+      setStartMode(null);
+    }
+  }, [id, currentNode]);
+
+  const handleUnlearnForNode = useCallback(async (targetNode: Node, scope: 'subtree' | 'node') => {
+    if (!id) return;
+    setSaving(true);
+    try {
+      await unlearnNodeIds(scope === 'subtree' ? collectSubtreeIds(targetNode) : [targetNode.id]);
+      const [learned, crossKeys] = await Promise.all([
+        getLearnedNodeIds(id).catch(() => new Set<string>()),
+        getCrossOpeningLearnedPositionKeys(id).catch(() => new Set<string>()),
+      ]);
+      setLearnedNodeIds(learned);
+      setCrossLearnedPositionKeys(crossKeys);
+    } finally {
+      setSaving(false);
+      setNodeActionMenu(null);
+    }
+  }, [id]);
+
   // ── PGN import ───────────────────────────────────────────────────────────
 
   const handlePgnImport = useCallback(async () => {
@@ -885,7 +962,7 @@ export default function OpeningDetailScreen() {
   return (
     <SafeAreaView className="flex-1 bg-bg-base">
       {/* Header */}
-      <View className="flex-row items-center gap-2 px-4 py-2">
+      <View className="flex-row items-center gap-2 px-3 py-2">
         <Pressable
           onPress={() => router.back()}
           className="w-8 h-8 items-center justify-center rounded-lg active:bg-bg-elevated"
@@ -894,13 +971,14 @@ export default function OpeningDetailScreen() {
         </Pressable>
         <MaterialCommunityIcons
           name="chess-king"
-          size={20}
+          size={18}
           color={isWhite ? colorTheme.gold.default : colorTheme.accent.default}
         />
-        <Text className="text-content-primary text-base font-semibold flex-1" numberOfLines={1}>
+        <Text className="text-content-primary text-sm font-semibold flex-1" numberOfLines={1}>
           {opening.name}
         </Text>
         {saving && <ActivityIndicator size="small" color={colorTheme.accent.default} />}
+        {/* Learn */}
         <Pressable
           onPress={() => hasUnlearned && setStartMode('learn')}
           disabled={!hasUnlearned}
@@ -909,6 +987,7 @@ export default function OpeningDetailScreen() {
           {hasUnlearned && <Text className="text-gold text-[8px]">●</Text>}
           <Text className={`text-xs font-medium ${hasUnlearned ? 'text-accent' : 'text-content-muted'}`}>Learn</Text>
         </Pressable>
+        {/* Practice */}
         <Pressable
           onPress={() => hasLearned && setStartMode('practice')}
           disabled={!hasLearned}
@@ -916,29 +995,68 @@ export default function OpeningDetailScreen() {
         >
           <Text className={`text-xs font-medium ${hasLearned ? 'text-gold' : 'text-content-muted'}`}>Practice</Text>
         </Pressable>
+        {/* Unlearn */}
         <Pressable
-          onPress={() => { setPgnText(''); setImportError(null); setImportProgress(null); setPgnOpen(true); }}
-          className="px-2 py-1 rounded-md active:bg-bg-elevated"
+          onPress={() => hasLearned && setStartMode('unlearn')}
+          disabled={!hasLearned}
+          className={`px-2 py-1 rounded-md ${hasLearned ? 'bg-danger/10 active:bg-danger/20' : 'bg-bg-elevated'}`}
         >
-          <Text className="text-accent text-xs">Import/Merge PGN</Text>
+          <Text className={`text-xs font-medium ${hasLearned ? 'text-danger' : 'text-content-muted'}`}>Unlearn</Text>
         </Pressable>
+        {/* Overflow menu */}
         <Pressable
-          onPress={() => { setExportCopied(false); setPgnExportOpen(true); }}
-          disabled={!tree}
-          className="px-2 py-1 rounded-md active:bg-bg-elevated"
-          style={{ opacity: tree ? 1 : 0.4 }}
+          onPress={() => setOverflowOpen(true)}
+          className="w-8 h-8 items-center justify-center rounded-lg active:bg-bg-elevated"
         >
-          <Text className="text-accent text-xs">Export PGN</Text>
+          <MaterialCommunityIcons name="dots-vertical" size={20} color={colorTheme.content.muted} />
         </Pressable>
-        <View className="px-2 py-1 rounded-md bg-bg-elevated flex-row items-center gap-1">
-          <Text className="text-content-muted text-xs">Database</Text>
-          <Text className="text-content-muted text-[9px] uppercase opacity-60">soon</Text>
-        </View>
-        <View className="px-2 py-1 rounded-md bg-bg-elevated flex-row items-center gap-1">
-          <Text className="text-content-muted text-xs">Analysis</Text>
-          <Text className="text-content-muted text-[9px] uppercase opacity-60">soon</Text>
-        </View>
       </View>
+
+      {/* Overflow menu modal */}
+      <Modal
+        visible={overflowOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setOverflowOpen(false)}
+      >
+        <Pressable
+          className="flex-1"
+          style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
+          onPress={() => setOverflowOpen(false)}
+        >
+          <View className="absolute top-16 right-3 bg-bg-elevated border border-border rounded-xl overflow-hidden shadow-lg" style={{ minWidth: 180 }}>
+            <Pressable
+              onPress={() => { setOverflowOpen(false); setPgnText(''); setImportError(null); setImportProgress(null); setPgnOpen(true); }}
+              className="px-4 py-3 active:bg-bg-surface flex-row items-center gap-2"
+            >
+              <MaterialCommunityIcons name="file-import-outline" size={16} color={colorTheme.accent.default} />
+              <Text className="text-content-primary text-sm">Import / Merge PGN</Text>
+            </Pressable>
+            <View className="h-px bg-border" />
+            <Pressable
+              onPress={() => { setOverflowOpen(false); setExportCopied(false); setPgnExportOpen(true); }}
+              disabled={!tree}
+              className="px-4 py-3 active:bg-bg-surface flex-row items-center gap-2"
+              style={{ opacity: tree ? 1 : 0.4 }}
+            >
+              <MaterialCommunityIcons name="file-export-outline" size={16} color={colorTheme.accent.default} />
+              <Text className="text-content-primary text-sm">Export PGN</Text>
+            </Pressable>
+            <View className="h-px bg-border" />
+            <View className="px-4 py-3 flex-row items-center gap-2 opacity-40">
+              <MaterialCommunityIcons name="database-outline" size={16} color={colorTheme.content.muted} />
+              <Text className="text-content-muted text-sm">Database</Text>
+              <Text className="text-content-muted text-[9px] uppercase ml-1">soon</Text>
+            </View>
+            <View className="h-px bg-border" />
+            <View className="px-4 py-3 flex-row items-center gap-2 opacity-40">
+              <MaterialCommunityIcons name="magnify-scan" size={16} color={colorTheme.content.muted} />
+              <Text className="text-content-muted text-sm">Analysis</Text>
+              <Text className="text-content-muted text-[9px] uppercase ml-1">soon</Text>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
 
       {/* Board */}
       <View className="items-center px-3">
@@ -1042,7 +1160,7 @@ export default function OpeningDetailScreen() {
               onSelect={selectNode}
               onLongPress={(nodeId) => {
                 const n = nodeMap.get(nodeId);
-                if (n) openTransReprompt(n);
+                if (n) setNodeActionMenu(n);
               }}
             />
           ) : (
@@ -1066,7 +1184,78 @@ export default function OpeningDetailScreen() {
         )}
       </View>
 
-      {/* Learn / Practice start dialog */}
+      {/* Node action menu (long-press on a move) */}
+      <Modal
+        visible={!!nodeActionMenu}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setNodeActionMenu(null)}
+      >
+        {nodeActionMenu && (() => {
+          function subtreeHasLearned(n: Node): boolean {
+            if (learnedNodeIds.has(n.id)) return true;
+            return (n.children ?? []).some(subtreeHasLearned);
+          }
+          const hasSubtreeLearned = subtreeHasLearned(nodeActionMenu);
+          const nodeIsLearned = learnedNodeIds.has(nodeActionMenu.id);
+          const label = moveSanWithNumber(nodeActionMenu);
+          return (
+            <Pressable
+              className="flex-1 justify-end"
+              style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+              onPress={() => setNodeActionMenu(null)}
+            >
+              <Pressable onPress={() => {}} className="bg-bg-elevated border-t border-border rounded-t-2xl overflow-hidden">
+                <View className="px-4 py-3 border-b border-border">
+                  <Text className="text-content-muted text-xs text-center font-medium">{label}</Text>
+                </View>
+                <Pressable
+                  onPress={() => { setNodeActionMenu(null); openTransReprompt(nodeActionMenu); }}
+                  className="px-4 py-3.5 active:bg-bg-surface flex-row items-center gap-3"
+                >
+                  <MaterialCommunityIcons name="swap-horizontal" size={18} color={colorTheme.accent.default} />
+                  <Text className="text-content-primary text-sm">
+                    {nodeActionMenu.transposes_to_node_id ? 'Change transposition link…' : 'Transpositions…'}
+                  </Text>
+                </Pressable>
+                {(hasSubtreeLearned || nodeIsLearned) && <View className="h-px bg-border" />}
+                {hasSubtreeLearned && (
+                  <Pressable
+                    onPress={() => handleUnlearnForNode(nodeActionMenu, 'subtree')}
+                    disabled={saving}
+                    className="px-4 py-3.5 active:bg-bg-surface flex-row items-center gap-3"
+                    style={{ opacity: saving ? 0.5 : 1 }}
+                  >
+                    <MaterialCommunityIcons name="eraser" size={18} color={colorTheme.danger} />
+                    <Text className="text-danger text-sm">Unlearn subtree</Text>
+                  </Pressable>
+                )}
+                {nodeIsLearned && (
+                  <Pressable
+                    onPress={() => handleUnlearnForNode(nodeActionMenu, 'node')}
+                    disabled={saving}
+                    className="px-4 py-3.5 active:bg-bg-surface flex-row items-center gap-3"
+                    style={{ opacity: saving ? 0.5 : 1 }}
+                  >
+                    <MaterialCommunityIcons name="eraser-variant" size={18} color={colorTheme.danger} />
+                    <Text className="text-danger text-sm">Unlearn this position</Text>
+                  </Pressable>
+                )}
+                <View className="h-px bg-border" />
+                <Pressable
+                  onPress={() => setNodeActionMenu(null)}
+                  className="px-4 py-3.5 active:bg-bg-surface items-center"
+                >
+                  <Text className="text-content-secondary text-sm font-medium">Cancel</Text>
+                </Pressable>
+                <View style={{ height: 20 }} />
+              </Pressable>
+            </Pressable>
+          );
+        })()}
+      </Modal>
+
+      {/* Learn / Practice / Unlearn start dialog */}
       <Modal
         visible={!!startMode}
         transparent
@@ -1074,7 +1263,38 @@ export default function OpeningDetailScreen() {
         onRequestClose={() => setStartMode(null)}
       >
         {startMode && currentNode && (() => {
-          const counts = computeApplicableCounts(currentNode, openingColor, effectiveLearnedNodeIds, startMode);
+          if (startMode === 'unlearn') {
+            function subtreeHasLearned(n: Node): boolean {
+              if (learnedNodeIds.has(n.id)) return true;
+              return (n.children ?? []).some(subtreeHasLearned);
+            }
+            const subtreeEnabled = !isRoot && subtreeHasLearned(currentNode);
+            const nodeEnabled = !isRoot && learnedNodeIds.has(currentNode.id);
+            return (
+              <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+                <View className="bg-bg-elevated border border-border rounded-xl p-5 w-full max-w-md">
+                  <Text className="text-content-primary font-semibold text-base mb-1">Unlearn positions</Text>
+                  <Text className="text-content-muted text-sm mb-4">Which positions should be forgotten?</Text>
+                  <View className="gap-2">
+                    <UnlearnButton label="Whole opening" desc="Reset all learned positions across all branches" enabled={hasLearned} onPress={() => handleUnlearnScope('all')} saving={saving} />
+                    {!isRoot && (
+                      <UnlearnButton label="This subtree" desc={subtreeEnabled ? `Positions below ${currentNode.move_san ?? 'the start'} only` : 'Nothing learned in this subtree'} enabled={subtreeEnabled} onPress={() => handleUnlearnScope('subtree')} saving={saving} />
+                    )}
+                    {!isRoot && (
+                      <UnlearnButton label="Just this position" desc={nodeEnabled ? `${currentNode.move_san ?? 'This position'} only` : 'This position is not learned'} enabled={nodeEnabled} onPress={() => handleUnlearnScope('node')} saving={saving} />
+                    )}
+                  </View>
+                  <Pressable
+                    onPress={() => setStartMode(null)}
+                    className="mt-4 py-2 rounded-lg border border-border items-center"
+                  >
+                    <Text className="text-content-secondary text-sm">Cancel</Text>
+                  </Pressable>
+                </View>
+              </View>
+            );
+          }
+          const counts = computeApplicableCounts(currentNode, openingColor, effectiveLearnedNodeIds, startMode as 'learn' | 'practice');
           const fromHereCount = counts.get(currentNode.id) ?? 0;
           const fromHereEnabled = fromHereCount > 0;
           const fromRootEnabled = startMode === 'learn' ? hasUnlearned : hasLearned;
@@ -1721,6 +1941,22 @@ export default function OpeningDetailScreen() {
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
+
+function UnlearnButton({ label, desc, enabled, onPress, saving }: {
+  label: string; desc: string; enabled: boolean; onPress: () => void; saving: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={!enabled || saving}
+      className={`px-3 py-3 rounded-lg ${enabled ? 'bg-danger/10 active:bg-danger/20' : 'bg-bg-surface'}`}
+      style={{ opacity: saving ? 0.5 : 1 }}
+    >
+      <Text className={`text-sm font-medium ${enabled ? 'text-danger' : 'text-content-muted'}`}>{label}</Text>
+      <Text className={`text-xs mt-0.5 ${enabled ? 'text-danger/60' : 'text-content-muted'}`}>{desc}</Text>
+    </Pressable>
+  );
+}
 
 const NavButton = memo(function NavButton({
   onPress, disabled, icon,

@@ -255,7 +255,10 @@ export default function Practice() {
     const out = attemptMove(session, result.san);
     setSession(out.session);
     if (out.verdict === 'correct') {
-      if (mode === 'learn' && session.wrongAttemptsHere > 0) {
+      const goesToEnd = mode === 'learn'
+        ? session.wrongAttemptsHere > 0
+        : session.wrongAttemptsHere > 0 || session.hintLevel > 0;
+      if (goesToEnd) {
         showBanner('Correct — but you stumbled. We\'ll re-ask this at the end.', 'info', 3500);
       } else showBanner('Correct', 'info', 500);
     } else if (out.verdict === 'wrong') {
@@ -364,7 +367,7 @@ export default function Practice() {
   // We also stamp an "X" on the destination square via squareStyles.
   const doneArrows = useMemo(() => {
     const out: Array<{ startSquare: string; endSquare: string; color: string }> = [];
-    if (!session || session.status !== 'awaiting-user') return out;
+    if (!session || session.status !== 'awaiting-user' || mode === "learn") return out;
     const sideAtFen = session.currentNode.fen.split(' ')[1] === 'w' ? 'white' : 'black';
     if (sideAtFen !== session.options.userColor) return out;
     for (const c of session.currentNode.children ?? []) {

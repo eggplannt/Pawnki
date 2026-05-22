@@ -22,6 +22,10 @@ import {
   computeApplicableCounts,
   computeLearnableMap,
   augmentLearnedWithTranspositions,
+  unlearnPositionsForOpening,
+  unlearnNodeIds,
+  fenSide,
+  isUserMove,
   type Opening,
   type Node,
 } from '@pawnki/shared';
@@ -139,6 +143,12 @@ function keyPathMoves(path: Node[]): Node[] {
   });
 }
 
+function collectSubtreeIds(node: Node): string[] {
+  const ids = [node.id];
+  for (const c of node.children ?? []) ids.push(...collectSubtreeIds(c));
+  return ids;
+}
+
 function countDescendants(node: Node): number {
   let n = 0;
   for (const c of node.children ?? []) {
@@ -222,7 +232,7 @@ export default function OpeningDetail() {
   const navHistory = useNavHistory();
   // Cross-opening switch confirmation. When non-null, modal is shown.
   const [crossSwitch, setCrossSwitch] = useState<{ target: LinkTargetInfo; fromLinkId: string } | null>(null);
-  const [startMode, setStartMode] = useState<'learn' | 'practice' | null>(null);
+  const [startMode, setStartMode] = useState<'learn' | 'practice' | 'unlearn' | null>(null);
   const [randomOrder, setRandomOrder] = useState(false);
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
   const [linkConflict, setLinkConflict] = useState<{ conflict: IntraLinkConflict; nodeToDelete: Node } | null>(null);
@@ -613,10 +623,33 @@ export default function OpeningDetail() {
         .filter((s): s is string => !!s),
       result.san,
     ];
+
+    // If the parent is a user-decision position with exactly one existing
+    // non-link user-move child, adding this second move makes the first one
+    // no longer uniquely learnable — auto-unlearn it.
+    const openingColor = opening?.color;
+    const existingUniqueKidIds = openingColor && fenSide(currentNode.fen) === openingColor
+      ? (currentNode.children ?? [])
+          .filter((c) => isUserMove(c, openingColor) && !c.transposes_to_node_id)
+          .map((c) => c.id)
+      : [];
+    const shouldAutoUnlearn = existingUniqueKidIds.length === 1;
+
     setSaving(true);
     createNode(id, parentId, result.san, result.from + result.to + (result.promotion ?? ''), newFen)
       .then(async (newNode) => {
+        if (shouldAutoUnlearn) {
+          await unlearnNodeIds(existingUniqueKidIds);
+        }
         await reloadTree(newNode.id);
+        if (shouldAutoUnlearn) {
+          const [learned, crossKeys] = await Promise.all([
+            getLearnedNodeIds(id).catch(() => new Set<string>()),
+            getCrossOpeningLearnedPositionKeys(id).catch(() => new Set<string>()),
+          ]);
+          setLearnedNodeIds(learned);
+          setCrossLearnedPositionKeys(crossKeys);
+        }
         const [intra, cross] = await Promise.all([
           findIntraOpeningTransposition(newFen, id, newNode.id),
           findTransposition(newFen, id, userPathSans),
@@ -708,6 +741,48 @@ export default function OpeningDetail() {
     } finally {
       setSaving(false);
       setEditingAnnotation(false);
+    }
+  }
+
+  // ── Unlearn ──────────────────────────────────────────────────────────────
+
+  async function handleUnlearnScope(scope: 'all' | 'subtree' | 'node') {
+    if (!id || !currentNode) return;
+    setSaving(true);
+    try {
+      if (scope === 'all') {
+        await unlearnPositionsForOpening(id);
+      } else if (scope === 'subtree') {
+        await unlearnNodeIds(collectSubtreeIds(currentNode));
+      } else {
+        await unlearnNodeIds([currentNode.id]);
+      }
+      const [learned, crossKeys] = await Promise.all([
+        getLearnedNodeIds(id).catch(() => new Set<string>()),
+        getCrossOpeningLearnedPositionKeys(id).catch(() => new Set<string>()),
+      ]);
+      setLearnedNodeIds(learned);
+      setCrossLearnedPositionKeys(crossKeys);
+    } finally {
+      setSaving(false);
+      setStartMode(null);
+    }
+  }
+
+  async function handleUnlearnForNode(targetNode: Node, scope: 'subtree' | 'node') {
+    if (!id) return;
+    setSaving(true);
+    try {
+      await unlearnNodeIds(scope === 'subtree' ? collectSubtreeIds(targetNode) : [targetNode.id]);
+      const [learned, crossKeys] = await Promise.all([
+        getLearnedNodeIds(id).catch(() => new Set<string>()),
+        getCrossOpeningLearnedPositionKeys(id).catch(() => new Set<string>()),
+      ]);
+      setLearnedNodeIds(learned);
+      setCrossLearnedPositionKeys(crossKeys);
+    } finally {
+      setSaving(false);
+      setContextMenu(null);
     }
   }
 
@@ -984,6 +1059,17 @@ export default function OpeningDetail() {
                 Practice
               </button>
               <button
+                onClick={() => hasLearned && setStartMode('unlearn')}
+                disabled={!hasLearned}
+                title={hasLearned ? 'Reset all learned positions in this opening' : 'Nothing learned yet'}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${hasLearned
+                    ? 'bg-danger/10 text-danger hover:bg-danger/20'
+                    : 'bg-bg-elevated text-content-muted cursor-not-allowed'
+                  }`}
+              >
+                Unlearn
+              </button>
+              <button
                 disabled
                 title="Master-game frequencies for this position — coming soon"
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-bg-elevated text-content-muted cursor-not-allowed inline-flex items-center gap-1"
@@ -1176,32 +1262,64 @@ export default function OpeningDetail() {
       </div>
 
       {/* ── Context menu ── */}
-      {contextMenu && (
-        <div
-          className="fixed z-50 bg-bg-elevated border border-border rounded-xl shadow-lg py-1 min-w-[140px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={() => { selectNode(contextMenu.node); setContextMenu(null); }}
-            className="w-full text-left px-3 py-2 text-sm text-content-primary hover:bg-bg-surface transition-colors"
+      {contextMenu && (() => {
+        function subtreeHasLearned(n: Node): boolean {
+          if (learnedNodeIds.has(n.id)) return true;
+          return (n.children ?? []).some(subtreeHasLearned);
+        }
+        const hasSubtreeLearned = subtreeHasLearned(contextMenu.node);
+        const nodeIsLearned = learnedNodeIds.has(contextMenu.node.id);
+        return (
+          <div
+            className="fixed z-50 bg-bg-elevated border border-border rounded-xl shadow-lg py-1 min-w-[160px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(e) => e.stopPropagation()}
           >
-            Go to move
-          </button>
-          <button
-            onClick={() => { openTransReprompt(contextMenu.node); }}
-            className="w-full text-left px-3 py-2 text-sm text-content-primary hover:bg-bg-surface transition-colors"
-          >
-            {contextMenu.node.transposes_to_node_id ? 'Change transposition link…' : 'Transpositions…'}
-          </button>
-          <button
-            onClick={() => { handleDeleteNode(contextMenu.node); }}
-            className="w-full text-left px-3 py-2 text-sm text-danger hover:bg-bg-surface transition-colors"
-          >
-            Delete subtree
-          </button>
-        </div>
-      )}
+            <button
+              onClick={() => { selectNode(contextMenu.node); setContextMenu(null); }}
+              className="w-full text-left px-3 py-2 text-sm text-content-primary hover:bg-bg-surface transition-colors"
+            >
+              Go to move
+            </button>
+            <button
+              onClick={() => { openTransReprompt(contextMenu.node); }}
+              className="w-full text-left px-3 py-2 text-sm text-content-primary hover:bg-bg-surface transition-colors"
+            >
+              {contextMenu.node.transposes_to_node_id ? 'Change transposition link…' : 'Transpositions…'}
+            </button>
+            {(hasSubtreeLearned || nodeIsLearned) && (
+              <div className="border-t border-border mt-1 pt-1">
+                {hasSubtreeLearned && (
+                  <button
+                    onClick={() => handleUnlearnForNode(contextMenu.node, 'subtree')}
+                    disabled={saving}
+                    className="w-full text-left px-3 py-2 text-sm text-danger hover:bg-bg-surface transition-colors disabled:opacity-50"
+                  >
+                    Unlearn subtree
+                  </button>
+                )}
+                {nodeIsLearned && (
+                  <button
+                    onClick={() => handleUnlearnForNode(contextMenu.node, 'node')}
+                    disabled={saving}
+                    className="w-full text-left px-3 py-2 text-sm text-danger hover:bg-bg-surface transition-colors disabled:opacity-50"
+                  >
+                    Unlearn this position
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="border-t border-border mt-1 pt-1">
+              <button
+                onClick={() => { handleDeleteNode(contextMenu.node); }}
+                className="w-full text-left px-3 py-2 text-sm text-danger hover:bg-bg-surface transition-colors"
+              >
+                Delete subtree
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Transposition choice modal ── */}
       {transChoice && tree && (() => {
@@ -1546,9 +1664,57 @@ export default function OpeningDetail() {
         </div>
       )}
 
-      {/* ── Learn / Practice start dialog ── */}
+      {/* ── Learn / Practice / Unlearn start dialog ── */}
       {startMode && opening && currentNode && id && (() => {
-        const counts = computeApplicableCounts(currentNode, opening.color, effectiveLearnedNodeIds, startMode);
+        if (startMode === 'unlearn') {
+          function subtreeHasLearned(n: Node): boolean {
+            if (learnedNodeIds.has(n.id)) return true;
+            return (n.children ?? []).some(subtreeHasLearned);
+          }
+          const subtreeEnabled = !isRoot && subtreeHasLearned(currentNode);
+          const nodeEnabled = !isRoot && learnedNodeIds.has(currentNode.id);
+          const unlearnCls = (on: boolean) => [
+            'w-full px-3 py-2.5 rounded-lg text-sm font-medium text-left transition-colors',
+            on ? 'bg-danger/10 text-danger hover:bg-danger/20' : 'bg-bg-surface text-content-muted cursor-not-allowed',
+          ].join(' ');
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setStartMode(null)}>
+              <div className="bg-bg-elevated border border-border rounded-xl p-6 max-w-sm mx-4 shadow-2xl w-full" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-content-primary font-semibold mb-1">Unlearn positions</h3>
+                <p className="text-content-muted text-sm mb-4">Which positions should be forgotten?</p>
+                <div className="flex flex-col gap-2">
+                  <button onClick={() => handleUnlearnScope('all')} disabled={!hasLearned || saving} className={unlearnCls(hasLearned)}>
+                    Whole opening
+                    <span className="block text-xs opacity-70 mt-0.5">Reset all learned positions across all branches</span>
+                  </button>
+                  {!isRoot && (
+                    <button onClick={() => handleUnlearnScope('subtree')} disabled={!subtreeEnabled || saving} className={unlearnCls(subtreeEnabled)}>
+                      This subtree
+                      <span className="block text-xs opacity-70 mt-0.5">
+                        {subtreeEnabled ? `Positions below ${currentNode.move_san ?? 'the start'} only` : 'Nothing learned in this subtree'}
+                      </span>
+                    </button>
+                  )}
+                  {!isRoot && (
+                    <button onClick={() => handleUnlearnScope('node')} disabled={!nodeEnabled || saving} className={unlearnCls(nodeEnabled)}>
+                      Just this position
+                      <span className="block text-xs opacity-70 mt-0.5">
+                        {nodeEnabled ? `${currentNode.move_san ?? 'This position'} only` : 'This position is not learned'}
+                      </span>
+                    </button>
+                  )}
+                </div>
+                <button
+                  onClick={() => setStartMode(null)}
+                  className="mt-4 w-full py-2 rounded-lg border border-border text-content-secondary text-sm hover:bg-bg-surface"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          );
+        }
+        const counts = computeApplicableCounts(currentNode, opening.color, effectiveLearnedNodeIds, startMode as 'learn' | 'practice');
         const fromHereCount = counts.get(currentNode.id) ?? 0;
         const fromHereEnabled = fromHereCount > 0;
         const fromRootEnabled = startMode === 'learn' ? hasUnlearned : hasLearned;
@@ -1581,9 +1747,7 @@ export default function OpeningDetail() {
                   disabled={!fromRootEnabled}
                   className={[
                     'w-full px-3 py-2.5 rounded-lg text-sm font-medium text-left transition-colors',
-                    fromRootEnabled
-                      ? enabledCls
-                      : 'bg-bg-surface text-content-muted cursor-not-allowed',
+                    fromRootEnabled ? enabledCls : 'bg-bg-surface text-content-muted cursor-not-allowed',
                   ].join(' ')}
                 >
                   Whole opening
@@ -1594,27 +1758,17 @@ export default function OpeningDetail() {
                 <button
                   onClick={() => { setStartMode(null); navigate(startUrl(true)); }}
                   disabled={!fromHereEnabled}
-                  title={
-                    fromHereEnabled
-                      ? undefined
-                      : isLearn
-                        ? 'Nothing unlearned in this subtree.'
-                        : 'Nothing learned in this subtree yet.'
-                  }
+                  title={fromHereEnabled ? undefined : isLearn ? 'Nothing unlearned in this subtree.' : 'Nothing learned in this subtree yet.'}
                   className={[
                     'w-full px-3 py-2.5 rounded-lg text-sm font-medium text-left transition-colors',
-                    fromHereEnabled
-                      ? enabledCls
-                      : 'bg-bg-surface text-content-muted cursor-not-allowed',
+                    fromHereEnabled ? enabledCls : 'bg-bg-surface text-content-muted cursor-not-allowed',
                   ].join(' ')}
                 >
-                  This branch only
+                  This subtree
                   <span className="block text-xs opacity-70 mt-0.5">
                     {fromHereEnabled
                       ? `Positions below ${currentNode.move_san ?? 'the start'} only`
-                      : isLearn
-                        ? 'Nothing left to learn here'
-                        : 'Nothing learned here yet'}
+                      : isLearn ? 'Nothing left to learn here' : 'Nothing learned here yet'}
                   </span>
                 </button>
               </div>

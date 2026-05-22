@@ -213,10 +213,12 @@ export default function PracticeScreen() {
     const out = attemptMove(session, move.san);
     setSession(out.session);
     if (out.verdict === 'correct') {
-      if (mode === 'learn' && session.wrongAttemptsHere > 0) {
+      const goesToEnd = mode === 'learn'
+        ? session.wrongAttemptsHere > 0
+        : session.wrongAttemptsHere > 0 || session.hintLevel > 0;
+      if (goesToEnd) {
         showBanner('Correct — but you stumbled. We\'ll re-ask this at the end.', 'info', 3500);
-      }
-      else showBanner('Correct', 'info', 500);
+      } else showBanner('Correct', 'info', 500);
     } else if (out.verdict === 'wrong') {
       showBanner(out.reason ?? 'Wrong move.', 'err');
     } else if (out.verdict === 'wrong-disallowed') {

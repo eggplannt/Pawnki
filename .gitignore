@@ -2,6 +2,8 @@
 .env
 .env.local
 .env.*.local
+!apps/expo/.env
+!apps/web/.env
 
 # Go
 server/tmp/
