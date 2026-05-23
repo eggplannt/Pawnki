@@ -45,7 +45,7 @@ export function applySm2(prev: CardState, quality: Quality): NextCardState {
     interval = 1;
   } else {
     repetitions = prev.repetitions + 1;
-    if (repetitions === 1) interval = 1;
+    if (repetitions === 1) interval = 2;
     else if (repetitions === 2) interval = 6;
     else interval = Math.max(1, Math.round(prev.interval * ease));
   }
