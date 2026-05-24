@@ -101,7 +101,7 @@ export default function Practice() {
   const randomizeOrder = searchParams.get('random') === '1';
 
   const { loading: premiumLoading } = usePremium();
-  const [adDone, setAdDone] = useState(false);
+  const [adDone, setAdDone] = useState(mode !== 'practice');
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
