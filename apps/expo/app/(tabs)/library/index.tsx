@@ -29,12 +29,18 @@ type OpeningWithStats = Opening & {
 
 export default function LibraryScreen() {
   const { colors: colorTheme } = useColorTheme();
-  const [tab, setTab] = useState<Tab>('white');
+  const [tab, setTabState] = useState<Tab>('white');
+  const [query, setQuery] = useState('');
   const [openings, setOpenings] = useState<OpeningWithStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
+
+  function setTab(t: Tab) {
+    setTabState(t);
+    setQuery('');
+  }
 
   const fetchOpenings = useCallback(async () => {
     const [data, learnedCounts, learnableCounts] = await Promise.all([
@@ -64,7 +70,9 @@ export default function LibraryScreen() {
     loadOpenings();
   }, [loadOpenings]);
 
-  const filtered = openings.filter((o) => o.color === tab);
+  const forTab = openings.filter((o) => o.color === tab);
+  const q = query.trim().toLowerCase();
+  const filtered = q ? forTab.filter((o) => o.name.toLowerCase().includes(q)) : forTab;
 
   return (
     <AppShell>
@@ -112,6 +120,23 @@ export default function LibraryScreen() {
           })}
         </View>
 
+        {/* Search */}
+        <View className="mx-5 mb-4 flex-row items-center bg-bg-surface border border-border rounded-xl px-4">
+          <MaterialCommunityIcons name="magnify" size={18} color={colorTheme.content.muted} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search openings…"
+            placeholderTextColor={colorTheme.content.muted}
+            className="flex-1 py-2.5 pl-2 text-sm text-content-primary"
+          />
+          {query.length > 0 && (
+            <Pressable onPress={() => setQuery('')} hitSlop={8}>
+              <MaterialCommunityIcons name="close-circle" size={16} color={colorTheme.content.muted} />
+            </Pressable>
+          )}
+        </View>
+
         {/* Content */}
         {loading ? (
           <View className="flex-1 items-center justify-center">
@@ -119,19 +144,27 @@ export default function LibraryScreen() {
           </View>
         ) : filtered.length === 0 ? (
           <View className="flex-1 items-center justify-center px-8">
-            <View className="mb-4 opacity-30">
-              <MaterialCommunityIcons
-                name="chess-king"
-                size={64}
-                color={tab === 'white' ? colorTheme.gold.default : colorTheme.accent.default}
-              />
-            </View>
-            <Text className="text-content-muted text-lg mb-2">
-              No {tab} openings yet
-            </Text>
-            <Text className="text-content-muted text-sm text-center">
-              Create one to start building your repertoire.
-            </Text>
+            {forTab.length > 0 ? (
+              <Text className="text-content-muted text-sm text-center">
+                No {tab} openings match "{query}"
+              </Text>
+            ) : (
+              <>
+                <View className="mb-4 opacity-30">
+                  <MaterialCommunityIcons
+                    name="chess-king"
+                    size={64}
+                    color={tab === 'white' ? colorTheme.gold.default : colorTheme.accent.default}
+                  />
+                </View>
+                <Text className="text-content-muted text-lg mb-2">
+                  No {tab} openings yet
+                </Text>
+                <Text className="text-content-muted text-sm text-center">
+                  Create one to start building your repertoire.
+                </Text>
+              </>
+            )}
           </View>
         ) : (
           <ScrollView

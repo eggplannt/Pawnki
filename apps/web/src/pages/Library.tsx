@@ -22,9 +22,11 @@ export default function Library() {
   const [openings, setOpenings] = useState<OpeningWithStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [query, setQuery] = useState('');
 
   function setTab(t: Tab) {
     setTabState(t);
+    setQuery('');
     setSearchParams(t === 'white' ? {} : { color: t }, { replace: true });
   }
 
@@ -51,7 +53,9 @@ export default function Library() {
     finally { setLoading(false); }
   }
 
-  const filtered = openings.filter((o) => o.color === tab);
+  const forTab = openings.filter((o) => o.color === tab);
+  const q = query.trim().toLowerCase();
+  const filtered = q ? forTab.filter((o) => o.name.toLowerCase().includes(q)) : forTab;
 
   return (
     <AppShell>
@@ -65,7 +69,7 @@ export default function Library() {
           </div>
         </div>
         <ColorTabs tab={tab} setTab={setTab} />
-        <OpeningList loading={loading} filtered={filtered} tab={tab} onDeleted={loadOpenings} />
+        <OpeningList loading={loading} filtered={filtered} tab={tab} hasAny={forTab.length > 0} query={query} onQueryChange={setQuery} onDeleted={loadOpenings} />
       </div>
 
       {/* ── Desktop layout: board center, content right ────────────── */}
@@ -76,7 +80,7 @@ export default function Library() {
         </div>
 
         {/* Right panel: color tabs + opening list */}
-        <div className="w-80 flex-none flex flex-col border-l border-border overflow-hidden">
+        <div className="w-96 flex-none flex flex-col border-l border-border overflow-hidden">
           <div className="p-5 pb-3 shrink-0 border-b border-border-subtle">
             <div className="flex items-center justify-between mb-3">
               <h1 className="text-content-primary text-lg font-semibold">Library</h1>
@@ -88,7 +92,7 @@ export default function Library() {
             <ColorTabs tab={tab} setTab={setTab} />
           </div>
           <div className="flex-1 overflow-auto p-4">
-            <OpeningList loading={loading} filtered={filtered} tab={tab} onDeleted={loadOpenings} />
+            <OpeningList loading={loading} filtered={filtered} tab={tab} hasAny={forTab.length > 0} query={query} onQueryChange={setQuery} onDeleted={loadOpenings} />
           </div>
         </div>
       </div>
@@ -158,35 +162,59 @@ function ColorTabs({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
   );
 }
 
-function OpeningList({ loading, filtered, tab, onDeleted }: {
+function OpeningList({ loading, filtered, tab, hasAny, query, onQueryChange, onDeleted }: {
   loading: boolean;
   filtered: OpeningWithStats[];
   tab: Tab;
+  hasAny: boolean;
+  query: string;
+  onQueryChange: (q: string) => void;
   onDeleted: () => void;
 }) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-  if (filtered.length === 0) {
-    return (
-      <div className="text-center py-20">
-        <div className="mb-4 flex justify-center opacity-30">
-          <Icon path={mdiChessKing} size={2.5} color={`rgb(var(--color-${tab === 'white' ? 'gold' : 'accent'}))`} />
-        </div>
-        <p className="text-content-muted text-lg mb-2">No {tab} openings yet</p>
-        <p className="text-content-muted text-sm">Create one to start building your repertoire.</p>
-      </div>
-    );
-  }
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
-      {filtered.map((opening) => (
-        <OpeningCard key={opening.id} opening={opening} onDeleted={onDeleted} />
-      ))}
+    <div>
+      <div className="relative mb-4">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          placeholder="Search openings…"
+          className="w-full bg-bg-surface border border-border rounded-xl px-4 py-2.5 pr-9 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-accent/50 transition-colors"
+        />
+        {query && (
+          <button
+            onClick={() => onQueryChange('')}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-content-muted hover:text-content-primary text-xl leading-none"
+          >
+            ×
+          </button>
+        )}
+      </div>
+      {loading ? (
+        <div className="flex items-center justify-center py-16">
+          <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16">
+          {hasAny ? (
+            <p className="text-content-muted text-sm">No {tab} openings match "{query}"</p>
+          ) : (
+            <>
+              <div className="mb-4 flex justify-center opacity-30">
+                <Icon path={mdiChessKing} size={2.5} color={`rgb(var(--color-${tab === 'white' ? 'gold' : 'accent'}))`} />
+              </div>
+              <p className="text-content-muted text-lg mb-2">No {tab} openings yet</p>
+              <p className="text-content-muted text-sm">Create one to start building your repertoire.</p>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+          {filtered.map((opening) => (
+            <OpeningCard key={opening.id} opening={opening} onDeleted={onDeleted} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
