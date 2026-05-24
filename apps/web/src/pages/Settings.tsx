@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import Icon from '@mdi/react';
+import { mdiThemeLightDark, mdiWeatherSunny, mdiWeatherNight } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme, type ThemePref, type BoardPaletteKey } from '@/hooks/useColorTheme';
@@ -6,9 +8,9 @@ import { useReviewOrder, type ReviewOrder } from '@/hooks/useReviewOrder';
 import { boardPalettes, BOARD_PALETTE_KEYS, deleteMyAccount } from '@pawnki/shared';
 
 const THEME_OPTIONS: { value: ThemePref; label: string; icon: string }[] = [
-  { value: 'system', label: 'System', icon: '⊙' },
-  { value: 'light',  label: 'Light',  icon: '☀' },
-  { value: 'dark',   label: 'Dark',   icon: '☾' },
+  { value: 'system', label: 'System', icon: mdiThemeLightDark },
+  { value: 'light',  label: 'Light',  icon: mdiWeatherSunny },
+  { value: 'dark',   label: 'Dark',   icon: mdiWeatherNight },
 ];
 
 const REVIEW_ORDER_OPTIONS: { value: ReviewOrder; label: string; desc: string }[] = [
@@ -60,7 +62,7 @@ export default function Settings() {
                     : 'text-content-muted hover:text-content-secondary'
                 }`}
               >
-                <span>{opt.icon}</span>
+                <Icon path={opt.icon} size={0.85} />
                 {opt.label}
               </button>
             ))}

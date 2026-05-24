@@ -4,7 +4,7 @@ import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import Icon from '@mdi/react';
-import { mdiChessKing, mdiDelete, mdiDatabaseOutline, mdiMagnifyScan } from '@mdi/js';
+import { mdiChessKing, mdiChessPawn, mdiDelete, mdiDatabaseOutline, mdiMagnifyScan, mdiExportVariant, mdiImport, mdiDotsVertical, mdiPageFirst, mdiPageLast, mdiChevronLeft, mdiChevronRight } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
 import {
   getOpening, getNodes, buildTree,
@@ -282,6 +282,8 @@ export default function OpeningDetail() {
   const [importTranspositionCount, setImportTranspositionCount] = useState<number | null>(null);
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: Node } | null>(null);
+  const [showOverflowMenu, setShowOverflowMenu] = useState(false);
+  const overflowMenuRef = useRef<HTMLDivElement>(null);
 
   const parentMap = useMemo(() => (tree ? buildParentMap(tree) : new Map<string, Node>()), [tree]);
 
@@ -567,6 +569,17 @@ export default function OpeningDetail() {
   useEffect(() => { liveNodeRef.current = currentNode; }, [currentNode]);
   const liveColorsRef = useRef(colors);
   useEffect(() => { liveColorsRef.current = colors; }, [colors]);
+
+  useEffect(() => {
+    if (!showOverflowMenu) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (overflowMenuRef.current && !overflowMenuRef.current.contains(e.target as globalThis.Node)) {
+        setShowOverflowMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showOverflowMenu]);
 
   const handlePieceDrag = useCallback(({ square }: { isSparePiece: boolean; piece: { pieceType: string }; square: string | null }) => {
     const node = liveNodeRef.current;
@@ -1012,9 +1025,9 @@ export default function OpeningDetail() {
 
   return (
     <AppShell>
-      <div className="flex-1 flex flex-col lg:flex-row h-full overflow-hidden">
+      <div className="flex flex-col lg:flex-row lg:h-full lg:overflow-hidden">
         {/* ── Board column ── */}
-        <div className="flex flex-col items-center shrink-0 p-3 lg:flex-1 lg:p-6 lg:justify-center lg:overflow-hidden">
+        <div className="flex flex-col items-center p-3 lg:flex-1 lg:p-6 lg:justify-center lg:overflow-hidden lg:shrink-0">
           {/* Title bar */}
           <div className="w-full flex items-center gap-2 mb-2 min-w-0">
             <Link
@@ -1028,9 +1041,9 @@ export default function OpeningDetail() {
               path={mdiChessKing}
               size={0.9}
               color={`rgb(var(--color-${opening.color === 'white' ? 'gold' : 'accent'}))`}
-              className="shrink-0"
+              className="shrink-0 hidden lg:block"
             />
-            <h1 className="text-content-primary text-lg font-semibold truncate">{opening.name}</h1>
+            <h1 className="hidden lg:block text-content-primary text-lg font-semibold truncate">{opening.name}</h1>
             <div className="ml-auto flex items-center gap-1 shrink-0">
               {saving && (
                 <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin mr-1" />
@@ -1069,26 +1082,59 @@ export default function OpeningDetail() {
               >
                 Unlearn
               </button>
+              {/* Desktop: inline export/import buttons */}
               <button
                 onClick={() => { setShowPgnExport(true); setExportCopied(false); }}
                 disabled={!tree}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors bg-bg-elevated text-content-secondary hover:text-content-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                className="hidden lg:inline-flex px-2 py-1.5 text-xs font-medium rounded-lg transition-colors bg-bg-elevated text-content-secondary hover:text-content-primary disabled:opacity-40 disabled:cursor-not-allowed items-center gap-1"
                 title="Export PGN"
               >
+                <Icon path={mdiExportVariant} size={0.65} />
                 Export PGN
               </button>
               <button
                 onClick={() => { setShowPgnImport(true); setImportError(null); setPgnText(''); setImportProgress(null); }}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors bg-bg-elevated text-content-secondary hover:text-content-primary"
+                className="hidden lg:inline-flex px-2 py-1.5 text-xs font-medium rounded-lg transition-colors bg-bg-elevated text-content-secondary hover:text-content-primary items-center gap-1"
                 title="Import/Merge PGN"
               >
+                <Icon path={mdiImport} size={0.65} />
                 Import PGN
               </button>
+
+              {/* Mobile: three-dots overflow menu */}
+              <div className="relative lg:hidden" ref={overflowMenuRef}>
+                <button
+                  onClick={() => setShowOverflowMenu(v => !v)}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg text-content-secondary hover:bg-bg-elevated transition-colors"
+                  title="More options"
+                >
+                  <Icon path={mdiDotsVertical} size={0.85} />
+                </button>
+                {showOverflowMenu && (
+                  <div className="absolute right-0 top-full mt-1 bg-bg-elevated border border-border rounded-xl shadow-xl shadow-black/20 z-50 py-1 min-w-[160px]">
+                    <button
+                      onClick={() => { setShowPgnExport(true); setExportCopied(false); setShowOverflowMenu(false); }}
+                      disabled={!tree}
+                      className="w-full text-left px-4 py-2.5 text-sm text-content-secondary hover:text-content-primary hover:bg-bg-surface transition-colors flex items-center gap-2.5 disabled:opacity-40"
+                    >
+                      <Icon path={mdiExportVariant} size={0.75} />
+                      Export PGN
+                    </button>
+                    <button
+                      onClick={() => { setShowPgnImport(true); setImportError(null); setPgnText(''); setImportProgress(null); setShowOverflowMenu(false); }}
+                      className="w-full text-left px-4 py-2.5 text-sm text-content-secondary hover:text-content-primary hover:bg-bg-surface transition-colors flex items-center gap-2.5"
+                    >
+                      <Icon path={mdiImport} size={0.75} />
+                      Import PGN
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
           {/* Board */}
-          <div className="w-full aspect-square max-h-[calc(100vh-220px)] max-w-[calc(100vh-220px)]">
+          <div className="w-full aspect-square lg:max-h-[calc(100vh-220px)] lg:max-w-[calc(100vh-220px)]">
             <BoardErrorBoundary resetKey={boardFen}>
               <Chessboard
                 options={{
@@ -1124,10 +1170,31 @@ export default function OpeningDetail() {
 
           {/* Nav controls */}
           <div className="flex items-center gap-1 mt-2">
-            <NavButton onClick={goToStart} disabled={!hasPrev} title="Start (Home)">⏮</NavButton>
-            <NavButton onClick={goPrev} disabled={!hasPrev} title="Previous (←)">◀</NavButton>
-            <NavButton onClick={goNext} disabled={!hasNext} title="Next (→)">▶</NavButton>
-            <NavButton onClick={goToEnd} disabled={!hasNext} title="End (End)">⏭</NavButton>
+            <NavButton onClick={goToStart} disabled={!hasPrev} title="Start (Home)" icon={mdiPageFirst} />
+            <NavButton onClick={goPrev} disabled={!hasPrev} title="Previous (←)" icon={mdiChevronLeft} />
+            <NavButton onClick={goNext} disabled={!hasNext} title="Next (→)" icon={mdiChevronRight} />
+            <NavButton onClick={goToEnd} disabled={!hasNext} title="End (End)" icon={mdiPageLast} />
+            {!isRoot && (
+              <button
+                onClick={() => handleDeleteNode()}
+                disabled={saving}
+                className="lg:hidden ml-auto w-10 h-10 flex items-center justify-center rounded-xl bg-bg-surface border border-danger/40 text-danger hover:bg-danger/10 transition-all disabled:opacity-30"
+                title="Delete selected move"
+              >
+                <Icon path={mdiDelete} size={0.85} />
+              </button>
+            )}
+          </div>
+
+          {/* Mobile opening name */}
+          <div className="lg:hidden w-full mt-2 flex items-start gap-1.5">
+            <Icon
+              path={mdiChessKing}
+              size={0.85}
+              color={`rgb(var(--color-${opening.color === 'white' ? 'gold' : 'accent'}))`}
+              className="shrink-0 mt-0.5"
+            />
+            <h1 className="text-content-primary text-base font-semibold leading-snug">{opening.name}</h1>
           </div>
 
           {/* Annotation */}
@@ -1166,14 +1233,14 @@ export default function OpeningDetail() {
         </div>
 
         {/* ── Move tree panel ── */}
-        <div className="relative border-t lg:border-t-0 lg:border-l border-border bg-bg-surface flex flex-col shrink-0 min-h-0 max-h-[40vh] lg:max-h-none lg:w-80 xl:w-96">
+        <div className="relative border-t lg:border-t-0 lg:border-l border-border bg-bg-surface flex flex-col lg:shrink-0 lg:min-h-0 lg:w-80 xl:w-96">
           {/* Panel header */}
           <div className="px-4 py-3 border-b border-border shrink-0 flex items-center gap-2">
             <button
               onClick={() => setPanelMode('pgn')}
-              className={`text-xs font-medium uppercase tracking-wider transition-colors ${panelMode === 'pgn' ? 'text-content-secondary' : 'text-content-muted hover:text-content-secondary'}`}
+              className={`text-xs font-medium uppercase tracking-wider transition-colors inline-flex items-center gap-1 ${panelMode === 'pgn' ? 'text-content-secondary' : 'text-content-muted hover:text-content-secondary'}`}
             >
-              <span className="text-accent text-xs mr-1">♟</span>PGN
+              <Icon path={mdiChessPawn} size={0.6} className="text-accent" />PGN
             </button>
             <button
               onClick={() => setPanelMode('links')}
@@ -1203,6 +1270,16 @@ export default function OpeningDetail() {
               Analysis
               <span className="text-[0.6rem] uppercase opacity-50">soon</span>
             </button>
+            {!isRoot && (
+              <button
+                onClick={() => handleDeleteNode()}
+                disabled={saving}
+                className="ml-auto hidden lg:flex w-7 h-7 items-center justify-center rounded-md text-danger hover:bg-danger/10 transition-colors disabled:opacity-50"
+                title="Delete selected move (Delete)"
+              >
+                <Icon path={mdiDelete} size={0.7} />
+              </button>
+            )}
           </div>
           {panelMode === 'links' ? (
             <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 min-h-0">
@@ -1239,7 +1316,7 @@ export default function OpeningDetail() {
               Analysis coming soon
             </div>
           ) : (
-            <div ref={moveListRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 pb-14 min-h-0">
+            <div ref={moveListRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 min-h-0">
               <LinkTargetsContext.Provider value={transTargets}>
                 <CanonicalTargetsContext.Provider value={canonicalTargetIds}>
                   <LearnedContext.Provider value={learnedCtxValue}>
@@ -1254,17 +1331,6 @@ export default function OpeningDetail() {
                 </CanonicalTargetsContext.Provider>
               </LinkTargetsContext.Provider>
             </div>
-          )}
-          {/* Floating delete button */}
-          {!isRoot && (
-            <button
-              onClick={() => handleDeleteNode()}
-              disabled={saving}
-              className="absolute bottom-3 right-3 w-9 h-9 flex items-center justify-center rounded-full bg-danger text-white hover:brightness-110 transition-all shadow-lg disabled:opacity-50"
-              title="Delete selected move (Delete)"
-            >
-              <Icon path={mdiDelete} size={0.75} />
-            </button>
           )}
         </div>
       </div>
@@ -1980,11 +2046,11 @@ export default function OpeningDetail() {
   );
 }
 
-function NavButton({ onClick, disabled, title, children }: {
+function NavButton({ onClick, disabled, title, icon }: {
   onClick: () => void;
   disabled: boolean;
   title: string;
-  children: React.ReactNode;
+  icon: string;
 }) {
   return (
     <button
@@ -1993,7 +2059,7 @@ function NavButton({ onClick, disabled, title, children }: {
       title={title}
       className="w-10 h-10 flex items-center justify-center rounded-xl bg-bg-surface border border-border text-content-secondary hover:text-accent hover:border-accent/40 hover:bg-accent/5 transition-all disabled:opacity-30 disabled:hover:text-content-secondary disabled:hover:border-border disabled:hover:bg-bg-surface"
     >
-      {children}
+      <Icon path={icon} size={0.9} />
     </button>
   );
 }

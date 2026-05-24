@@ -186,7 +186,7 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
       <button
         onClick={handleDelete}
         title="Delete opening"
-        className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-md text-content-muted opacity-0 group-hover:opacity-100 hover:text-danger hover:bg-danger/10 transition-all"
+        className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-md text-content-muted hover:text-danger hover:bg-danger/10 transition-all opacity-100 lg:opacity-0 lg:group-hover:opacity-100"
       >
         <Icon path={mdiDelete} size={0.6} />
       </button>
