@@ -299,3 +299,30 @@ export async function getReviewStats(): Promise<ReviewStats> {
     retention: reviewed > 0 ? Math.round((retained / reviewed) * 100) : null,
   };
 }
+
+export interface UpcomingDay {
+  date: string;
+  count: number;
+}
+
+export async function getUpcomingReviews(days = 7): Promise<UpcomingDay[]> {
+  const today = todayYmd();
+  const end = addDays(today, days);
+
+  const { data, error } = await getDb()
+    .from('review_cards')
+    .select('due_date')
+    .gt('due_date', today)
+    .lte('due_date', end);
+  if (error) throw error;
+
+  const counts = new Map<string, number>();
+  for (let i = 1; i <= days; i++) counts.set(addDays(today, i), 0);
+  for (const row of (data ?? []) as Array<{ due_date: string | null }>) {
+    if (row.due_date) counts.set(row.due_date, (counts.get(row.due_date) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .map(([date, count]) => ({ date, count }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}

@@ -12,9 +12,11 @@ import {
   gradeReview,
   getReviewStats,
   getStreak,
+  getUpcomingReviews,
   type ReviewItem,
   type ReviewStats,
   type Streak,
+  type UpcomingDay,
   applySm2,
   intervalLabel,
   type Quality,
@@ -64,6 +66,7 @@ export default function Review() {
   const [originalTotal, setOriginalTotal] = useState(0);
   const [stats, setStats] = useState<ReviewStats | null>(null);
   const [streak, setStreak] = useState<Streak | null>(null);
+  const [upcoming, setUpcoming] = useState<UpcomingDay[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionResults, setSessionResults] = useState<GradeResult[]>([]);
@@ -86,12 +89,14 @@ export default function Review() {
     setLoading(true);
     setError(null);
     try {
-      const [s, st] = await Promise.all([
+      const [s, st, up] = await Promise.all([
         getReviewStats(),
         getStreak().catch(() => null),
+        getUpcomingReviews().catch(() => []),
       ]);
       setStats(s);
       setStreak(st);
+      setUpcoming(up);
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load review stats');
     } finally {
@@ -192,14 +197,14 @@ export default function Review() {
     return <PreSessionAd onComplete={() => { setPendingAd(false); void startSession(); }} />;
   }
 
-  return <EntryScreen stats={stats} streak={streak} error={error} onStart={handleStartClick} />;
+  return <EntryScreen stats={stats} streak={streak} upcoming={upcoming} error={error} onStart={handleStartClick} />;
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────
 
 function EntryScreen({
-  stats, streak, error, onStart,
-}: { stats: ReviewStats | null; streak: Streak | null; error: string | null; onStart: () => void }) {
+  stats, streak, upcoming, error, onStart,
+}: { stats: ReviewStats | null; streak: Streak | null; upcoming: UpcomingDay[]; error: string | null; onStart: () => void }) {
   const hasDue = (stats?.dueToday ?? 0) > 0;
   return (
     <AppShell>
@@ -232,7 +237,7 @@ function EntryScreen({
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-3 mb-8">
+        <div className="grid grid-cols-3 gap-3 mb-6">
           <Metric label="Due today" value={String(stats?.dueToday ?? 0)} accent={hasDue} />
           <Metric label="In repertoire" value={String(stats?.totalLearned ?? 0)} />
           <Metric
@@ -240,6 +245,8 @@ function EntryScreen({
             value={stats?.retention === null ? '—' : `${stats?.retention ?? 0}%`}
           />
         </div>
+
+        <ForecastTimeline days={upcoming} />
 
         {hasDue ? (
           <button
@@ -263,6 +270,37 @@ function EntryScreen({
         )}
       </div>
     </AppShell>
+  );
+}
+
+function ForecastTimeline({ days }: { days: UpcomingDay[] }) {
+  if (days.length === 0) return null;
+  const max = Math.max(...days.map(d => d.count), 1);
+  return (
+    <div className="mb-6">
+      <p className="text-content-muted text-xs uppercase tracking-wider mb-3">Coming up</p>
+      <div className="flex gap-1.5 items-end">
+        {days.map(({ date, count }) => {
+          const [y, m, d] = date.split('-').map(Number);
+          const label = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short' });
+          const barH = count === 0 ? 2 : Math.max(6, Math.round((count / max) * 52));
+          return (
+            <div key={date} className="flex-1 flex flex-col items-center gap-1">
+              <span className="text-xs text-content-muted h-4 flex items-center">
+                {count > 0 ? count : ''}
+              </span>
+              <div className="relative w-full" style={{ height: '52px' }}>
+                <div
+                  className={`absolute bottom-0 w-full rounded-t-sm ${count > 0 ? 'bg-accent/40' : 'bg-border/40'}`}
+                  style={{ height: `${barH}px` }}
+                />
+              </div>
+              <span className="text-[10px] text-content-muted">{label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
