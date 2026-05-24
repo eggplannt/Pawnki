@@ -134,6 +134,12 @@ function tokenize(pgn: string): Token[] {
 
     // Move number (skip): 1. or 1... or 12.
     if (/\d/.test(ch)) {
+      // 1/2-1/2 starts with a digit but the slash stops the normal scanner
+      if (body.slice(i, i + 7) === '1/2-1/2') {
+        tokens.push({ type: 'result', value: '1/2-1/2' });
+        i += 7;
+        continue;
+      }
       let j = i;
       while (j < body.length && /[\d.]/.test(body[j])) j++;
       const num = body.slice(i, j);
@@ -232,9 +238,14 @@ function parseTokens(
     }
 
     if (token.type === 'move') {
-      const result = chess.move(token.value);
+      let result;
+      try {
+        result = chess.move(token.value);
+      } catch {
+        cursor.pos++;
+        continue;
+      }
       if (!result) {
-        // Invalid move — skip
         cursor.pos++;
         continue;
       }
