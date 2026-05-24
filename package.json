@@ -1,4 +1,8 @@
 {
   "private": true,
-  "workspaces": ["apps/*", "packages/*"]
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "typecheck": "bun run --filter 'pawnki-web' typecheck",
+    "lint": "echo 'No linting configured'"
+  }
 }
