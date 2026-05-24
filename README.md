@@ -10,11 +10,6 @@ Licensed under **Apache 2.0**.
 
 ## Status
 
-| Surface | State |
-|---|---|
-| Web app (`apps/web`) | **Alpha — primary target.** All phases 1–6 work; Phase 7 (polish + deployment) in progress. |
-| Android (`apps/expo`) | **Experimental.** Feature-parity in progress; ships as an APK on the GitHub Releases page, not to Play Store. iOS is not targeted yet. |
-
 ### What works
 
 - Google sign-in via Supabase Auth
