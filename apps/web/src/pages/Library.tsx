@@ -3,6 +3,8 @@ import { Link, useSearchParams } from 'react-router-dom';
 import Icon from '@mdi/react';
 import { mdiChessKing, mdiDelete } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
+import { FreePlayBoard } from '@/components/FreePlayBoard';
+import { useDesktop } from '@/hooks/useDesktop';
 import { listOpenings, deleteOpening, getLearnableCountsByOpening, getLearnedCountsByOpening, type Opening } from '@pawnki/shared';
 
 type Tab = 'white' | 'black';
@@ -16,18 +18,17 @@ export default function Library() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = searchParams.get('color') === 'black' ? 'black' : 'white';
   const [tab, setTabState] = useState<Tab>(initialTab);
+  const isDesktop = useDesktop();
+  const [openings, setOpenings] = useState<OpeningWithStats[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
 
   function setTab(t: Tab) {
     setTabState(t);
     setSearchParams(t === 'white' ? {} : { color: t }, { replace: true });
   }
-  const [openings, setOpenings] = useState<OpeningWithStats[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(false);
 
-  useEffect(() => {
-    loadOpenings();
-  }, []);
+  useEffect(() => { loadOpenings(); }, []);
 
   async function fetchOpenings() {
     const [data, learnedCounts, learnableCounts] = await Promise.all([
@@ -46,85 +47,50 @@ export default function Library() {
 
   async function loadOpenings() {
     setLoading(true);
-    try {
-      await fetchOpenings();
-    } finally {
-      setLoading(false);
-    }
+    try { await fetchOpenings(); }
+    finally { setLoading(false); }
   }
 
   const filtered = openings.filter((o) => o.color === tab);
 
   return (
     <AppShell>
-      <div className="flex-1 p-6 lg:p-8">
-        {/* Header */}
+      {/* ── Mobile layout ──────────────────────────────────────────── */}
+      <div className="flex-1 p-6 lg:hidden">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-content-primary text-2xl font-semibold">Library</h1>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => loadOpenings()}
-              disabled={loading}
-              title="Refresh"
-              className="w-9 h-9 flex items-center justify-center rounded-xl border border-border text-content-muted hover:text-content-primary hover:border-accent/40 transition-colors disabled:opacity-40"
-            >
-              <span className={loading ? 'animate-spin inline-block' : ''}>↻</span>
-            </button>
-            <button
-              onClick={() => { setShowCreate(true); fetchOpenings(); }}
-              className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-bg-base font-medium text-sm px-4 py-2.5 rounded-xl transition-colors shadow-sm shadow-accent/20"
-            >
-              <span className="text-lg leading-none">+</span>
-              New Opening
-            </button>
+            <RefreshButton loading={loading} onRefresh={loadOpenings} />
+            <NewOpeningButton onClick={() => { setShowCreate(true); fetchOpenings(); }} />
           </div>
         </div>
+        <ColorTabs tab={tab} setTab={setTab} />
+        <OpeningList loading={loading} filtered={filtered} tab={tab} onDeleted={loadOpenings} />
+      </div>
 
-        {/* Tabs */}
-        <div className="flex gap-1 bg-bg-surface rounded-xl p-1 mb-6 w-fit border border-border-subtle">
-          {(['white', 'black'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={[
-                'px-5 py-2 rounded-lg text-sm font-medium transition-all capitalize',
-                tab === t
-                  ? t === 'white'
-                    ? 'bg-gold/15 text-gold shadow-sm'
-                    : 'bg-accent/15 text-accent shadow-sm'
-                  : 'text-content-muted hover:text-content-secondary',
-              ].join(' ')}
-            >
-              <span className="inline-flex items-center gap-1.5">
-                <Icon path={mdiChessKing} size={0.7} color={`rgb(var(--color-${t === 'white' ? 'gold' : 'accent'}))`} />
-                {t === 'white' ? 'White' : 'Black'}
-              </span>
-            </button>
-          ))}
+      {/* ── Desktop layout: board center, content right ────────────── */}
+      <div className="hidden lg:flex flex-1 h-full overflow-hidden">
+        {/* Center: board */}
+        <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+          {isDesktop && <FreePlayBoard />}
         </div>
 
-        {/* Content */}
-        {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-20">
-            <div className="mb-4 flex justify-center opacity-30">
-              <Icon path={mdiChessKing} size={2.5} color={`rgb(var(--color-${tab === 'white' ? 'gold' : 'accent'}))`} />
+        {/* Right panel: color tabs + opening list */}
+        <div className="w-80 flex-none flex flex-col border-l border-border overflow-hidden">
+          <div className="p-5 pb-3 shrink-0 border-b border-border-subtle">
+            <div className="flex items-center justify-between mb-3">
+              <h1 className="text-content-primary text-lg font-semibold">Library</h1>
+              <div className="flex items-center gap-1.5">
+                <RefreshButton loading={loading} onRefresh={loadOpenings} />
+                <NewOpeningButton onClick={() => { setShowCreate(true); fetchOpenings(); }} />
+              </div>
             </div>
-            <p className="text-content-muted text-lg mb-2">No {tab} openings yet</p>
-            <p className="text-content-muted text-sm">
-              Create one to start building your repertoire.
-            </p>
+            <ColorTabs tab={tab} setTab={setTab} />
           </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((opening) => (
-              <OpeningCard key={opening.id} opening={opening} onDeleted={loadOpenings} />
-            ))}
+          <div className="flex-1 overflow-auto p-4">
+            <OpeningList loading={loading} filtered={filtered} tab={tab} onDeleted={loadOpenings} />
           </div>
-        )}
+        </div>
       </div>
 
       {showCreate && (
@@ -132,13 +98,96 @@ export default function Library() {
           defaultColor={tab}
           existingOpenings={openings}
           onClose={() => setShowCreate(false)}
-          onCreated={() => {
-            setShowCreate(false);
-            loadOpenings();
-          }}
+          onCreated={() => { setShowCreate(false); loadOpenings(); }}
         />
       )}
     </AppShell>
+  );
+}
+
+// ── Shared sub-components ───────────────────────────────────────────────────
+
+function RefreshButton({ loading, onRefresh }: { loading: boolean; onRefresh: () => void }) {
+  return (
+    <button
+      onClick={onRefresh}
+      disabled={loading}
+      title="Refresh"
+      className="w-9 h-9 flex items-center justify-center rounded-xl border border-border text-content-muted hover:text-content-primary hover:border-accent/40 transition-colors disabled:opacity-40"
+    >
+      <span className={loading ? 'animate-spin inline-block' : ''}>↻</span>
+    </button>
+  );
+}
+
+function NewOpeningButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-bg-base font-medium text-sm px-4 py-2.5 rounded-xl transition-colors shadow-sm shadow-accent/20"
+    >
+      <span className="text-lg leading-none">+</span>
+      <span className="hidden sm:inline">New Opening</span>
+    </button>
+  );
+}
+
+function ColorTabs({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
+  return (
+    <div className="flex gap-1 bg-bg-surface rounded-xl p-1 mb-4 w-fit border border-border-subtle">
+      {(['white', 'black'] as const).map((t) => (
+        <button
+          key={t}
+          onClick={() => setTab(t)}
+          className={[
+            'px-5 py-2 rounded-lg text-sm font-medium transition-all capitalize',
+            tab === t
+              ? t === 'white'
+                ? 'bg-gold/15 text-gold shadow-sm'
+                : 'bg-accent/15 text-accent shadow-sm'
+              : 'text-content-muted hover:text-content-secondary',
+          ].join(' ')}
+        >
+          <span className="inline-flex items-center gap-1.5">
+            <Icon path={mdiChessKing} size={0.7} color={`rgb(var(--color-${t === 'white' ? 'gold' : 'accent'}))`} />
+            {t === 'white' ? 'White' : 'Black'}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function OpeningList({ loading, filtered, tab, onDeleted }: {
+  loading: boolean;
+  filtered: OpeningWithStats[];
+  tab: Tab;
+  onDeleted: () => void;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+  if (filtered.length === 0) {
+    return (
+      <div className="text-center py-20">
+        <div className="mb-4 flex justify-center opacity-30">
+          <Icon path={mdiChessKing} size={2.5} color={`rgb(var(--color-${tab === 'white' ? 'gold' : 'accent'}))`} />
+        </div>
+        <p className="text-content-muted text-lg mb-2">No {tab} openings yet</p>
+        <p className="text-content-muted text-sm">Create one to start building your repertoire.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+      {filtered.map((opening) => (
+        <OpeningCard key={opening.id} opening={opening} onDeleted={onDeleted} />
+      ))}
+    </div>
   );
 }
 
@@ -154,9 +203,7 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
 
   return (
     <div className="relative bg-bg-surface border border-border rounded-xl hover:border-accent/40 transition-all group hover:shadow-md hover:shadow-black/10">
-      {/* Color stripe at top */}
       <div className={`h-1 rounded-t-xl ${isWhite ? 'bg-gold' : 'bg-accent'}`} />
-
       <Link to={`/library/${opening.id}`} className="block p-4">
         <div className="flex items-start justify-between mb-3 pr-8">
           <div className="flex items-center gap-2">
@@ -168,7 +215,7 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-content-muted text-xs bg-bg-elevated px-2 py-1 rounded-md">
-            {opening.learnedCount} Position{opening.learnedCount !== 1 ? "s" : ""} in repertoire
+            {opening.learnedCount} Position{opening.learnedCount !== 1 ? 's' : ''} in repertoire
           </span>
           {opening.learnableCount === 0 ? (
             <span className="bg-bg-elevated text-content-muted text-xs px-2 py-1 rounded-md italic">
@@ -176,13 +223,11 @@ function OpeningCard({ opening, onDeleted }: { opening: OpeningWithStats; onDele
             </span>
           ) : opening.learnedCount >= opening.learnableCount ? null : (
             <span className="bg-accent/15 text-accent text-xs font-medium px-2 py-1 rounded-md">
-              {opening.learnableCount - opening.learnedCount} Position{opening.learnableCount - opening.learnedCount !== 1 ? "s" : ""} to learn
+              {opening.learnableCount - opening.learnedCount} Position{opening.learnableCount - opening.learnedCount !== 1 ? 's' : ''} to learn
             </span>
           )}
         </div>
       </Link>
-
-      {/* Delete button */}
       <button
         onClick={handleDelete}
         title="Delete opening"
@@ -220,9 +265,7 @@ function CreateOpeningModal({
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return;
-    const duplicate = existingOpenings.find(
-      (o) => o.name === trimmed && o.color === color,
-    );
+    const duplicate = existingOpenings.find((o) => o.name === trimmed && o.color === color);
     if (duplicate) {
       setError(`You already have a ${color} opening named "${trimmed}".`);
       return;
@@ -240,10 +283,9 @@ function CreateOpeningModal({
     }
   }
 
-  const progressPct =
-    progress && progress.total > 0
-      ? Math.round((progress.current / progress.total) * 100)
-      : 0;
+  const progressPct = progress && progress.total > 0
+    ? Math.round((progress.current / progress.total) * 100)
+    : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={saving ? undefined : onClose}>
@@ -251,16 +293,13 @@ function CreateOpeningModal({
         className="bg-bg-surface border border-border rounded-2xl w-full max-w-md mx-4 overflow-hidden shadow-xl shadow-black/30"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header stripe */}
         <div className="flex gap-1 px-6 pt-6 mb-4">
           <div className="h-1 flex-1 rounded-full bg-accent" />
           <div className="h-1 flex-1 rounded-full bg-gold" />
           <div className="h-1 flex-1 rounded-full bg-accent-dim" />
         </div>
-
         <div className="px-6 pb-6">
           <h2 className="text-content-primary text-lg font-semibold mb-4">New Opening</h2>
-
           {saving ? (
             <div className="py-4 flex flex-col gap-3">
               <p className="text-content-secondary text-sm text-center">
@@ -272,10 +311,7 @@ function CreateOpeningModal({
               </p>
               {progress?.phase === 'importing' && progress.total > 0 && (
                 <div className="w-full bg-bg-elevated rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-accent h-full rounded-full transition-[width] duration-150"
-                    style={{ width: `${progressPct}%` }}
-                  />
+                  <div className="bg-accent h-full rounded-full transition-[width] duration-150" style={{ width: `${progressPct}%` }} />
                 </div>
               )}
               {progress?.phase === 'parsing' && (
@@ -286,7 +322,6 @@ function CreateOpeningModal({
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-              {/* Name */}
               <div>
                 <label className="block text-content-secondary text-sm mb-1">Name</label>
                 <input
@@ -298,8 +333,6 @@ function CreateOpeningModal({
                   autoFocus
                 />
               </div>
-
-              {/* Color */}
               <div>
                 <label className="block text-content-secondary text-sm mb-1">Color</label>
                 <div className="flex gap-2">
@@ -325,12 +358,10 @@ function CreateOpeningModal({
                   ))}
                 </div>
               </div>
-
-              {/* PGN */}
               <div>
                 <div className="flex items-baseline justify-between mb-1">
                   <label className="block text-content-secondary text-sm">
-                    PGN <span className="text-content-muted">(optional — import moves)</span>
+                    PGN <span className="text-content-muted">(optional)</span>
                   </label>
                   <label className="text-xs text-accent hover:underline cursor-pointer">
                     Load file…
@@ -341,13 +372,8 @@ function CreateOpeningModal({
                       onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (!file) return;
-                        try {
-                          const text = await file.text();
-                          setPgn(text);
-                        } finally {
-                          // Allow picking the same file again later.
-                          e.target.value = '';
-                        }
+                        try { setPgn(await file.text()); }
+                        finally { e.target.value = ''; }
                       }}
                     />
                   </label>
@@ -360,10 +386,7 @@ function CreateOpeningModal({
                   className="w-full bg-bg-elevated border border-border rounded-xl px-3 py-2.5 text-content-primary text-sm placeholder:text-content-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 resize-none font-mono"
                 />
               </div>
-
               {error && <p className="text-danger text-sm">{error}</p>}
-
-              {/* Actions */}
               <div className="flex gap-3 justify-end mt-2">
                 <button
                   type="button"

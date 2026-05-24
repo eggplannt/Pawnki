@@ -3,6 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import Icon from '@mdi/react';
 import { mdiThemeLightDark, mdiWeatherSunny, mdiWeatherNight, mdiStar, mdiStarOutline, mdiCheck } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
+import { FreePlayBoard } from '@/components/FreePlayBoard';
+import { useDesktop } from '@/hooks/useDesktop';
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme, type ThemePref, type BoardPaletteKey } from '@/hooks/useColorTheme';
 import { useReviewOrder, type ReviewOrder } from '@/hooks/useReviewOrder';
@@ -37,6 +39,7 @@ export default function Settings() {
   const { user, signOut } = useAuth();
   const { pref, setPref, boardPref, setBoardPref } = useColorTheme();
   const [reviewOrder, setReviewOrder] = useReviewOrder();
+  const isDesktop = useDesktop();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleting, setDeleting] = useState(false);
@@ -50,7 +53,6 @@ export default function Settings() {
   const justUpgraded = searchParams.get('upgraded') === '1';
   const checkoutSessionId = searchParams.get('session_id');
 
-  // After a successful Stripe checkout, verify the session server-side and update premium status.
   useEffect(() => {
     if (!justUpgraded) return;
     setSearchParams({}, { replace: true });
@@ -99,7 +101,6 @@ export default function Settings() {
     setDeleteError(null);
     try {
       await deleteMyAccount();
-      // Server-side row is gone; clear the local session too.
       await signOut();
     } catch (e: any) {
       setDeleteError(e?.message ?? 'Could not delete account. Try again.');
@@ -107,175 +108,183 @@ export default function Settings() {
     }
   }
 
-  return (
-    <AppShell>
-      <div className="p-8 max-w-lg">
-        <h1 className="text-content-primary text-2xl font-semibold mb-2">Settings</h1>
-        {user && (
-          <p className="text-content-secondary text-sm mb-8">{user.email}</p>
-        )}
+  const settingsForm = (
+    <>
+      <h1 className="text-content-primary text-2xl font-semibold mb-2">Settings</h1>
+      {user && <p className="text-content-secondary text-sm mb-8">{user.email}</p>}
 
-        {/* ── Premium ─────────────────────────────────────────────── */}
-        <section id="premium" className="mb-8">
-          <h2 className="text-content-muted text-xs font-medium uppercase tracking-wider mb-3 flex items-center gap-1.5">
-            <Icon path={mdiStarOutline} size={0.75} />
-            Premium
-          </h2>
+      {/* ── Premium ─────────────────────────────────────────────── */}
+      <section id="premium" className="mb-8">
+        <h2 className="text-content-muted text-xs font-medium uppercase tracking-wider mb-3 flex items-center gap-1.5">
+          <Icon path={mdiStarOutline} size={0.75} />
+          Premium
+        </h2>
 
-          {premiumLoading ? (
-            <div className="h-24 rounded-xl bg-bg-surface border border-border animate-pulse" />
-          ) : isPremium ? (
-            <div className="rounded-xl border border-accent/30 bg-accent/5 p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <Icon path={mdiStar} size={0.85} className="text-accent" />
-                <span className="text-content-primary font-medium text-sm">You're on Premium — thank you!</span>
-              </div>
-              <p className="text-content-muted text-xs mb-3">All ads are removed. You can manage or cancel your subscription at any time.</p>
-              {stripeError && <p className="text-danger text-xs mb-2">{stripeError}</p>}
-              <button
-                onClick={handleManage}
-                disabled={stripeLoading}
-                className="text-sm text-content-secondary border border-border rounded-lg px-4 py-2 hover:bg-bg-surface transition-colors disabled:opacity-50"
-              >
-                {stripeLoading ? 'Loading…' : 'Manage subscription'}
-              </button>
+        {premiumLoading ? (
+          <div className="h-24 rounded-xl bg-bg-surface border border-border animate-pulse" />
+        ) : isPremium ? (
+          <div className="rounded-xl border border-accent/30 bg-accent/5 p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <Icon path={mdiStar} size={0.85} className="text-accent" />
+              <span className="text-content-primary font-medium text-sm">You're on Premium — thank you!</span>
             </div>
-          ) : (
-            <div className="rounded-xl border border-border bg-bg-surface p-4">
-              {justUpgraded && (
-                <p className="text-accent text-sm mb-3 flex items-center gap-1.5">
-                  <Icon path={mdiCheck} size={0.75} />
-                  Subscription active — ads removed!
-                </p>
-              )}
-              <ul className="mb-4 flex flex-col gap-1.5">
-                {PREMIUM_BENEFITS.map((b) => (
-                  <li key={b} className="flex items-center gap-2 text-content-secondary text-sm">
-                    <Icon path={mdiCheck} size={0.65} className="text-accent flex-shrink-0" />
-                    {b}
-                  </li>
-                ))}
-              </ul>
-
-              {/* Price picker */}
-              <div className="flex gap-2 mb-4">
-                {(Object.entries(PRICES) as [PriceKey, typeof PRICES[PriceKey]][]).map(([key, price]) => (
-                  <button
-                    key={key}
-                    onClick={() => setSelectedPrice(key)}
-                    className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors ${
-                      selectedPrice === key ? 'border-accent bg-accent/5' : 'border-border hover:border-accent/40'
-                    }`}
-                  >
-                    <div className={`text-sm font-medium ${selectedPrice === key ? 'text-accent' : 'text-content-primary'}`}>
-                      {price.label}
-                    </div>
-                    <div className="text-content-muted text-xs">{price.amount}</div>
-                    {price.sub && <div className="text-accent text-xs font-medium">{price.sub}</div>}
-                  </button>
-                ))}
-              </div>
-
-              {stripeError && <p className="text-danger text-xs mb-2">{stripeError}</p>}
-              <button
-                onClick={handleSubscribe}
-                disabled={stripeLoading}
-                className="w-full py-2.5 rounded-lg bg-accent text-bg-base font-medium text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
-              >
-                {stripeLoading ? 'Redirecting…' : `Subscribe — ${PRICES[selectedPrice].amount}`}
-              </button>
-            </div>
-          )}
-        </section>
-
-        <section className="mb-8">
-          <h2 className="text-content-muted text-xs font-medium uppercase tracking-wider mb-3">Appearance</h2>
-          <div className="flex rounded-xl overflow-hidden border border-border bg-bg-surface p-1 gap-1">
-            {THEME_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => setPref(opt.value)}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  pref === opt.value
-                    ? 'bg-accent/15 text-accent'
-                    : 'text-content-muted hover:text-content-secondary'
-                }`}
-              >
-                <Icon path={opt.icon} size={0.85} />
-                {opt.label}
-              </button>
-            ))}
+            <p className="text-content-muted text-xs mb-3">All ads are removed. You can manage or cancel your subscription at any time.</p>
+            {stripeError && <p className="text-danger text-xs mb-2">{stripeError}</p>}
+            <button
+              onClick={handleManage}
+              disabled={stripeLoading}
+              className="text-sm text-content-secondary border border-border rounded-lg px-4 py-2 hover:bg-bg-surface transition-colors disabled:opacity-50"
+            >
+              {stripeLoading ? 'Loading…' : 'Manage subscription'}
+            </button>
           </div>
-        </section>
-
-        <section className="mb-8">
-          <h2 className="text-content-muted text-xs font-medium uppercase tracking-wider mb-3">Board theme</h2>
-          <div className="grid grid-cols-3 gap-2">
-            {BOARD_PALETTE_KEYS.map((key) => {
-              const p = boardPalettes[key];
-              const selected = boardPref === key;
-              return (
+        ) : (
+          <div className="rounded-xl border border-border bg-bg-surface p-4">
+            {justUpgraded && (
+              <p className="text-accent text-sm mb-3 flex items-center gap-1.5">
+                <Icon path={mdiCheck} size={0.75} />
+                Subscription active — ads removed!
+              </p>
+            )}
+            <ul className="mb-4 flex flex-col gap-1.5">
+              {PREMIUM_BENEFITS.map((b) => (
+                <li key={b} className="flex items-center gap-2 text-content-secondary text-sm">
+                  <Icon path={mdiCheck} size={0.65} className="text-accent flex-shrink-0" />
+                  {b}
+                </li>
+              ))}
+            </ul>
+            <div className="flex gap-2 mb-4">
+              {(Object.entries(PRICES) as [PriceKey, typeof PRICES[PriceKey]][]).map(([key, price]) => (
                 <button
                   key={key}
-                  onClick={() => setBoardPref(key as BoardPaletteKey)}
-                  className={`rounded-xl border p-2 transition-colors ${
-                    selected ? 'border-accent bg-accent/5' : 'border-border hover:border-accent/40'
+                  onClick={() => setSelectedPrice(key)}
+                  className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors ${
+                    selectedPrice === key ? 'border-accent bg-accent/5' : 'border-border hover:border-accent/40'
                   }`}
                 >
-                  <BoardPreview dark={p.dark} light={p.light} />
-                  <div className={`text-sm font-medium mt-2 ${selected ? 'text-accent' : 'text-content-primary'}`}>
-                    {p.label}
-                  </div>
+                  <div className={`text-sm font-medium ${selectedPrice === key ? 'text-accent' : 'text-content-primary'}`}>{price.label}</div>
+                  <div className="text-content-muted text-xs">{price.amount}</div>
+                  {price.sub && <div className="text-accent text-xs font-medium">{price.sub}</div>}
                 </button>
-              );
-            })}
+              ))}
+            </div>
+            {stripeError && <p className="text-danger text-xs mb-2">{stripeError}</p>}
+            <button
+              onClick={handleSubscribe}
+              disabled={stripeLoading}
+              className="w-full py-2.5 rounded-lg bg-accent text-bg-base font-medium text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
+            >
+              {stripeLoading ? 'Redirecting…' : `Subscribe — ${PRICES[selectedPrice].amount}`}
+            </button>
           </div>
-        </section>
+        )}
+      </section>
 
-        <section className="mb-8">
-          <h2 className="text-content-muted text-xs font-medium uppercase tracking-wider mb-3">Review order</h2>
-          <div className="flex flex-col gap-2">
-            {REVIEW_ORDER_OPTIONS.map((opt) => {
-              const selected = reviewOrder === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  onClick={() => setReviewOrder(opt.value)}
-                  className={`text-left rounded-xl border px-3 py-2 transition-colors ${
-                    selected ? 'border-accent bg-accent/5' : 'border-border hover:border-accent/40'
-                  }`}
-                >
-                  <div className={`text-sm font-medium ${selected ? 'text-accent' : 'text-content-primary'}`}>
-                    {opt.label}
-                  </div>
-                  <div className="text-content-muted text-xs mt-0.5">{opt.desc}</div>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={signOut}
-            className="text-sm text-content-secondary hover:text-content-primary border border-border rounded-lg px-4 py-2 transition-colors"
-          >
-            Sign out
-          </button>
+      <section className="mb-8">
+        <h2 className="text-content-muted text-xs font-medium uppercase tracking-wider mb-3">Appearance</h2>
+        <div className="flex rounded-xl overflow-hidden border border-border bg-bg-surface p-1 gap-1">
+          {THEME_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setPref(opt.value)}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                pref === opt.value
+                  ? 'bg-accent/15 text-accent'
+                  : 'text-content-muted hover:text-content-secondary'
+              }`}
+            >
+              <Icon path={opt.icon} size={0.85} />
+              {opt.label}
+            </button>
+          ))}
         </div>
+      </section>
 
-        <section className="mt-12 pt-6 border-t border-danger/20">
-          <h2 className="text-danger text-xs font-medium uppercase tracking-wider mb-2">Danger zone</h2>
-          <p className="text-content-muted text-sm mb-3">
-            Permanently delete your account, every opening, and all review history. This can't be undone.
-          </p>
-          <button
-            onClick={() => { setConfirmDelete(true); setDeleteConfirmText(''); setDeleteError(null); }}
-            className="text-sm text-danger border border-danger/40 rounded-lg px-4 py-2 hover:bg-danger/10 transition-colors"
-          >
-            Delete account
-          </button>
-        </section>
+      <section className="mb-8">
+        <h2 className="text-content-muted text-xs font-medium uppercase tracking-wider mb-3">Board theme</h2>
+        <div className="grid grid-cols-3 gap-2">
+          {BOARD_PALETTE_KEYS.map((key) => {
+            const p = boardPalettes[key];
+            const selected = boardPref === key;
+            return (
+              <button
+                key={key}
+                onClick={() => setBoardPref(key as BoardPaletteKey)}
+                className={`rounded-xl border p-2 transition-colors ${
+                  selected ? 'border-accent bg-accent/5' : 'border-border hover:border-accent/40'
+                }`}
+              >
+                <BoardPreview dark={p.dark} light={p.light} />
+                <div className={`text-sm font-medium mt-2 ${selected ? 'text-accent' : 'text-content-primary'}`}>
+                  {p.label}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="mb-8">
+        <h2 className="text-content-muted text-xs font-medium uppercase tracking-wider mb-3">Review order</h2>
+        <div className="flex flex-col gap-2">
+          {REVIEW_ORDER_OPTIONS.map((opt) => {
+            const selected = reviewOrder === opt.value;
+            return (
+              <button
+                key={opt.value}
+                onClick={() => setReviewOrder(opt.value)}
+                className={`text-left rounded-xl border px-3 py-2 transition-colors ${
+                  selected ? 'border-accent bg-accent/5' : 'border-border hover:border-accent/40'
+                }`}
+              >
+                <div className={`text-sm font-medium ${selected ? 'text-accent' : 'text-content-primary'}`}>{opt.label}</div>
+                <div className="text-content-muted text-xs mt-0.5">{opt.desc}</div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={signOut}
+          className="text-sm text-content-secondary hover:text-content-primary border border-border rounded-lg px-4 py-2 transition-colors"
+        >
+          Sign out
+        </button>
+      </div>
+
+      <section className="mt-12 pt-6 border-t border-danger/20">
+        <h2 className="text-danger text-xs font-medium uppercase tracking-wider mb-2">Danger zone</h2>
+        <p className="text-content-muted text-sm mb-3">
+          Permanently delete your account, every opening, and all review history. This can't be undone.
+        </p>
+        <button
+          onClick={() => { setConfirmDelete(true); setDeleteConfirmText(''); setDeleteError(null); }}
+          className="text-sm text-danger border border-danger/40 rounded-lg px-4 py-2 hover:bg-danger/10 transition-colors"
+        >
+          Delete account
+        </button>
+      </section>
+    </>
+  );
+
+  return (
+    <AppShell>
+      {/* Mobile */}
+      <div className="p-8 max-w-lg lg:hidden">
+        {settingsForm}
+      </div>
+
+      {/* Desktop: board center, settings right */}
+      <div className="hidden lg:flex flex-1 h-full overflow-hidden">
+        <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+          {isDesktop && <FreePlayBoard />}
+        </div>
+        <div className="w-[420px] flex-none border-l border-border overflow-auto p-8">
+          {settingsForm}
+        </div>
       </div>
 
       {confirmDelete && (
@@ -302,9 +311,7 @@ export default function Settings() {
               disabled={deleting}
               className="w-full bg-bg-surface border border-border rounded-lg px-3 py-2 text-content-primary text-sm font-mono outline-none focus:border-danger/40 transition-colors disabled:opacity-50"
             />
-            {deleteError && (
-              <p className="text-danger text-xs mt-2">{deleteError}</p>
-            )}
+            {deleteError && <p className="text-danger text-xs mt-2">{deleteError}</p>}
             <div className="flex gap-2 mt-4">
               <button
                 onClick={() => setConfirmDelete(false)}
