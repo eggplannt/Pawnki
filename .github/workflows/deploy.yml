@@ -5,6 +5,18 @@ on:
     branches: [main]
 
 jobs:
+  deploy-functions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+
+      - name: Deploy edge functions
+        run: supabase functions deploy --project-ref yevpbrlirmpnqefirbur
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
   deploy-web:
     runs-on: ubuntu-latest
     steps:
@@ -21,8 +33,8 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.PROD_SUPABASE_PUBLISHABLE_KEY }}
           VITE_STRIPE_PUBLISHABLE_KEY: ${{ secrets.PROD_STRIPE_PUBLISHABLE_KEY }}
-          VITE_STRIPE_PREMIUM_PRICE_ID_MONTHLY: ${{ secrets.PROD_STRIPE_PREMIUM_PRICE_ID_MONTHLY }}
-          VITE_STRIPE_PREMIUM_PRICE_ID_ANNUAL: ${{ secrets.PROD_STRIPE_PREMIUM_PRICE_ID_ANNUAL }}
+          VITE_STRIPE_PRICE_MONTHLY: ${{ secrets.PROD_STRIPE_PRICE_MONTHLY }}
+          VITE_STRIPE_PRICE_ANNUAL: ${{ secrets.PROD_STRIPE_PRICE_ANNUAL }}
           VITE_ADSENSE_CLIENT_ID: ${{ secrets.PROD_ADSENSE_CLIENT_ID }}
           VITE_ADSENSE_SLOT_PRESESSION: ${{ secrets.PROD_ADSENSE_SLOT_PRESESSION }}
           VITE_SELF_HOSTED: false
