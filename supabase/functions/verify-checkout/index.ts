@@ -16,10 +16,6 @@ serve(async (req) => {
   if (!stripeKey) {
     return new Response('STRIPE_SECRET_KEY not configured', { status: 500, headers: corsHeaders });
   }
-  const stripe = new Stripe(stripeKey, {
-    apiVersion: '2023-10-16',
-    httpClient: Stripe.createFetchHttpClient(),
-  });
 
   const authHeader = req.headers.get('Authorization');
   if (!authHeader) {
@@ -37,25 +33,37 @@ serve(async (req) => {
     return new Response('Unauthorized', { status: 401, headers: corsHeaders });
   }
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('stripe_customer_id')
-    .eq('id', user.id)
-    .single();
-
-  if (!profile?.stripe_customer_id) {
-    return new Response('No Stripe customer found', { status: 400, headers: corsHeaders });
+  const { sessionId } = await req.json();
+  if (!sessionId) {
+    return new Response('Missing sessionId', { status: 400, headers: corsHeaders });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const siteUrl = Deno.env.get('SITE_URL') ?? 'http://localhost:3000';
-
-  const portalSession = await stripe.billingPortal.sessions.create({
-    customer: profile.stripe_customer_id,
-    return_url: body.returnUrl ?? `${siteUrl}/settings`,
+  const stripe = new Stripe(stripeKey, {
+    apiVersion: '2023-10-16',
+    httpClient: Stripe.createFetchHttpClient(),
   });
 
-  return new Response(JSON.stringify({ url: portalSession.url }), {
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+  if (session.payment_status !== 'paid') {
+    return new Response(JSON.stringify({ isPremium: false }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  const admin = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  );
+
+  const now = new Date().toISOString();
+  await admin.from('profiles').update({
+    is_premium: true,
+    subscription_status: 'active',
+    premium_since: now,
+    updated_at: now,
+  }).eq('id', user.id);
+
+  return new Response(JSON.stringify({ isPremium: true }), {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
 });

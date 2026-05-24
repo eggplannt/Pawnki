@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { getDb } from './db';
 
@@ -40,18 +40,12 @@ export function PremiumProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const db = getDb();
 
-    async function fetchProfile() {
+    async function fetchProfile(userId: string) {
       try {
-        const { data: authData } = await db.auth.getUser();
-        if (!authData.user) {
-          setIsPremium(false);
-          setLoading(false);
-          return;
-        }
-        // is_premium is a new column — use any-cast until types are regenerated.
         const { data } = await (db as any)
           .from('profiles')
           .select('is_premium')
+          .eq('id', userId)
           .single();
         setIsPremium(data?.is_premium ?? false);
       } catch {
@@ -61,14 +55,11 @@ export function PremiumProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    fetchProfile();
-
-    const { data: { subscription } } = db.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_IN') {
+    const { data: { subscription } } = db.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
         setLoading(true);
-        fetchProfile();
-      }
-      if (event === 'SIGNED_OUT') {
+        fetchProfile(session.user.id);
+      } else {
         setIsPremium(false);
         setLoading(false);
       }
@@ -78,10 +69,10 @@ export function PremiumProvider({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick]);
 
-  function refetch() {
+  const refetch = useCallback(() => {
     setLoading(true);
     setTick((t) => t + 1);
-  }
+  }, []);
 
   return (
     <PremiumContext.Provider value={{ isPremium, loading, refetch }}>

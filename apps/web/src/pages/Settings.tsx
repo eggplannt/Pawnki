@@ -48,13 +48,23 @@ export default function Settings() {
   const [stripeError, setStripeError] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const justUpgraded = searchParams.get('upgraded') === '1';
+  const checkoutSessionId = searchParams.get('session_id');
 
-  // After a successful Stripe checkout, refetch premium status and clean up the URL.
+  // After a successful Stripe checkout, verify the session server-side and update premium status.
   useEffect(() => {
     if (!justUpgraded) return;
-    refetchPremium();
     setSearchParams({}, { replace: true });
-  }, [justUpgraded, refetchPremium, setSearchParams]);
+    if (checkoutSessionId) {
+      supabase.functions.invoke('verify-checkout', { body: { sessionId: checkoutSessionId } })
+        .then(({ error }) => {
+          if (error) setStripeError(`Upgrade verification failed: ${error.message}`);
+          refetchPremium();
+        });
+    } else {
+      refetchPremium();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [justUpgraded]);
 
   async function handleSubscribe() {
     setStripeLoading(true);

@@ -1,11 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import Stripe from 'https://esm.sh/stripe@14?target=deno';
-
-const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
-  apiVersion: '2023-10-16',
-  httpClient: Stripe.createFetchHttpClient(),
-});
+import Stripe from 'npm:stripe@13';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -16,6 +11,15 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
+
+  const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
+  if (!stripeKey) {
+    return new Response('STRIPE_SECRET_KEY not configured', { status: 500, headers: corsHeaders });
+  }
+  const stripe = new Stripe(stripeKey, {
+    apiVersion: '2023-10-16',
+    httpClient: Stripe.createFetchHttpClient(),
+  });
 
   const authHeader = req.headers.get('Authorization');
   if (!authHeader) {
@@ -69,7 +73,7 @@ serve(async (req) => {
     customer: customerId,
     mode: 'subscription',
     line_items: [{ price: priceId, quantity: 1 }],
-    success_url: body.successUrl ?? `${siteUrl}/settings?upgraded=1`,
+    success_url: body.successUrl ?? `${siteUrl}/settings?upgraded=1&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: body.cancelUrl ?? `${siteUrl}/settings`,
     allow_promotion_codes: true,
   });
