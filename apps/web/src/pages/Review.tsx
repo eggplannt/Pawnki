@@ -18,8 +18,10 @@ import {
   applySm2,
   intervalLabel,
   type Quality,
+  useShowAds,
 } from '@pawnki/shared';
 import { readReviewOrder } from '@/hooks/useReviewOrder';
+import { PreSessionAd } from '@/components/PreSessionAd';
 // gradeReview is used by the parent Review component below.
 
 type Stage = 'entry' | 'session' | 'done';
@@ -67,6 +69,9 @@ export default function Review() {
   const [sessionResults, setSessionResults] = useState<GradeResult[]>([]);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
+  const showAds = useShowAds();
+  const [pendingAd, setPendingAd] = useState(false);
+
   useEffect(() => { void loadEntry(); }, []);
 
   // Done when we've walked past the (possibly growing) queue.
@@ -113,6 +118,14 @@ export default function Review() {
       setError(e?.message ?? 'Failed to load due cards');
     } finally {
       setLoading(false);
+    }
+  }
+
+  function handleStartClick() {
+    if (showAds) {
+      setPendingAd(true);
+    } else {
+      void startSession();
     }
   }
 
@@ -175,7 +188,11 @@ export default function Review() {
     return <DoneScreen results={sessionResults} originalTotal={originalTotal} streak={streak} onBack={() => setStage('entry')} />;
   }
 
-  return <EntryScreen stats={stats} streak={streak} error={error} onStart={startSession} />;
+  if (pendingAd) {
+    return <PreSessionAd onComplete={() => { setPendingAd(false); void startSession(); }} />;
+  }
+
+  return <EntryScreen stats={stats} streak={streak} error={error} onStart={handleStartClick} />;
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────

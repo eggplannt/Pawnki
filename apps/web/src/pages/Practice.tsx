@@ -20,9 +20,11 @@ import {
   type SessionSummary,
   type Node,
   type Opening,
+  usePremium,
 } from '@pawnki/shared';
 import { useColorTheme } from '@/hooks/useColorTheme';
 import { legalTargetStyles } from '@/lib/board-highlights';
+import { PreSessionAd } from '@/components/PreSessionAd';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -97,6 +99,9 @@ export default function Practice() {
   const mode = (searchParams.get('mode') as PracticeMode) ?? 'learn';
   const fromNodeId = searchParams.get('from');
   const randomizeOrder = searchParams.get('random') === '1';
+
+  const { loading: premiumLoading } = usePremium();
+  const [adDone, setAdDone] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -427,7 +432,7 @@ export default function Practice() {
 
   // ── Render ───────────────────────────────────────────────────────────────
 
-  if (loading) {
+  if (loading || premiumLoading) {
     return <AppShell><div className="flex-1 flex items-center justify-center"><div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" /></div></AppShell>;
   }
   if (error || !session || !opening || !xOverlays) {
@@ -439,6 +444,10 @@ export default function Practice() {
         </div>
       </AppShell>
     );
+  }
+
+  if (!adDone) {
+    return <PreSessionAd onComplete={() => setAdDone(true)} />;
   }
 
   if (summary) return <SummaryScreen opening={opening} mode={mode} openingId={id!} summary={summary} onRestart={() => setReloadKey((k) => k + 1)} onPracticeMistakes={mode === 'learn' ? undefined : undefined /* not implemented in v1 */} />;
