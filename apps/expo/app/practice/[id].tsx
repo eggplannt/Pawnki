@@ -210,6 +210,7 @@ export default function PracticeScreen() {
 
   const handleMove = useCallback((move: ChessboardMove): boolean => {
     if (!session || session.status !== 'awaiting-user') return false;
+    const wasRequeue = session.phase === 'requeue';
     const out = attemptMove(session, move.san);
     setSession(out.session);
     if (out.verdict === 'correct') {
@@ -226,6 +227,11 @@ export default function PracticeScreen() {
     } else if (out.verdict === 'wrong-mode') {
       showBanner(out.reason ?? 'Not allowed in this mode.', 'warn');
     }
+    // Requeue is flashcard-style: a correct answer never advances the board
+    // to "after the move" — we either jump to the next requeue parent or
+    // transition to complete. Reject the drop visually so the piece snaps
+    // back to source instead of stranding on the drop square.
+    if (wasRequeue) return false;
     return out.verdict === 'correct';
   }, [session, showBanner]);
 
@@ -279,6 +285,9 @@ export default function PracticeScreen() {
   const doneArrows = useMemo(() => {
     const out: Array<{ from: string; to: string }> = [];
     if (!session || session.status !== 'awaiting-user') return out;
+    // During requeue the user is re-prompting a single specific position;
+    // "already-done this session" arrows would be noise here.
+    if (session.phase === 'requeue') return out;
     const userIsToMove = session.currentNode.fen.split(' ')[1] === (session.options.userColor === 'white' ? 'w' : 'b');
     if (!userIsToMove) return out;
     for (const c of session.currentNode.children ?? []) {

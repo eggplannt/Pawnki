@@ -237,6 +237,13 @@ const AnimatedPiece = memo(forwardRef<AnimatedPieceHandle, AnimatedPieceProps>(f
   const dragY = useSharedValue(0);
   const scale = useSharedValue(1);
   const elevated = useSharedValue(0); // 0/1: drives zIndex, decoupled from scale anim
+  // desiredX/Y mirror the piece's logical square's visual pos. The
+  // worklet-driven drop-settle / drag-back animations consult these when they
+  // finish, in case piece.square changed during the animation (e.g., learn
+  // mode fast-forward jumps the FEN to a position where the just-moved piece
+  // sits on a different square than where the user dropped it).
+  const desiredX = useSharedValue(initial.x);
+  const desiredY = useSharedValue(initial.y);
 
   // Finger-offset from piece center captured on drag start so we can recenter
   // the piece under the touch point (the touch may have landed anywhere on
@@ -245,14 +252,17 @@ const AnimatedPiece = memo(forwardRef<AnimatedPieceHandle, AnimatedPieceProps>(f
   const grabOffsetY = useSharedValue(0);
 
   // Animate to the new logical square whenever the piece's square or board
-  // geometry changes. Skip if a drag is currently in flight — the drag's own
-  // onStart will snap pos and the drag will own the visual until release.
+  // geometry changes. Skip if elevated — drag or drop-settle is in flight and
+  // owns the visual; the settle's onFinish callback will catch up to the
+  // (just-updated) desiredX/Y if needed.
   useEffect(() => {
-    if (elevated.value === 1) return;
     const t = squareToPixels(piece.square, squareSize, orientation);
+    desiredX.value = t.x;
+    desiredY.value = t.y;
+    if (elevated.value === 1) return;
     posX.value = withTiming(t.x, { duration: MOVE_ANIM_MS });
     posY.value = withTiming(t.y, { duration: MOVE_ANIM_MS });
-  }, [piece.square, squareSize, orientation, posX, posY, elevated]);
+  }, [piece.square, squareSize, orientation, posX, posY, desiredX, desiredY, elevated]);
 
   const isWhiteOrient = orientation === 'white';
   const pieceSquare = piece.square;
@@ -335,7 +345,14 @@ const AnimatedPiece = memo(forwardRef<AnimatedPieceHandle, AnimatedPieceProps>(f
           dragX.value = withTiming(0, { duration: DROP_SETTLE_MS });
           dragY.value = withTiming(0, { duration: DROP_SETTLE_MS }, (finished) => {
             'worklet';
-            if (finished) elevated.value = 0;
+            if (!finished) return;
+            elevated.value = 0;
+            // If piece.square shifted during the settle (e.g., learn-mode
+            // fast-forward FEN jump), catch up to the new logical square.
+            if (posX.value !== desiredX.value || posY.value !== desiredY.value) {
+              posX.value = withTiming(desiredX.value, { duration: MOVE_ANIM_MS });
+              posY.value = withTiming(desiredY.value, { duration: MOVE_ANIM_MS });
+            }
           });
           // Fade indicators rather than yanking them — covers the gap between
           // worklet end and React unmounting them via the deselect.
@@ -348,7 +365,12 @@ const AnimatedPiece = memo(forwardRef<AnimatedPieceHandle, AnimatedPieceProps>(f
           dragX.value = withTiming(0, { duration: DRAG_BACK_MS });
           dragY.value = withTiming(0, { duration: DRAG_BACK_MS }, (finished) => {
             'worklet';
-            if (finished) elevated.value = 0;
+            if (!finished) return;
+            elevated.value = 0;
+            if (posX.value !== desiredX.value || posY.value !== desiredY.value) {
+              posX.value = withTiming(desiredX.value, { duration: MOVE_ANIM_MS });
+              posY.value = withTiming(desiredY.value, { duration: MOVE_ANIM_MS });
+            }
           });
           indicatorsVisibleSV.value = withTiming(0, { duration: INDICATOR_FADE_MS });
         }
@@ -366,6 +388,7 @@ const AnimatedPiece = memo(forwardRef<AnimatedPieceHandle, AnimatedPieceProps>(f
     pieceSquare, squareSize, isWhiteOrient, pColor,
     onTap, onDragStart, onDrop,
     posX, posY, dragX, dragY, scale, elevated,
+    desiredX, desiredY,
     grabOffsetX, grabOffsetY,
     legalTargetsSV, indicatorsVisibleSV, dragSideSV,
   ]);
