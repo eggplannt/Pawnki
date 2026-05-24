@@ -20,9 +20,12 @@ import {
   gradeReview,
   getReviewStats,
   getStreak,
+  getUpcomingReviews,
+  type ColorTheme,
   type ReviewItem,
   type ReviewStats,
   type Streak,
+  type UpcomingDay,
   applySm2,
   intervalLabel,
   type Quality,
@@ -64,6 +67,7 @@ export default function ReviewScreen() {
   const [originalTotal, setOriginalTotal] = useState(0);
   const [stats, setStats] = useState<ReviewStats | null>(null);
   const [streak, setStreak] = useState<Streak | null>(null);
+  const [upcoming, setUpcoming] = useState<UpcomingDay[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionResults, setSessionResults] = useState<GradeResult[]>([]);
@@ -82,12 +86,14 @@ export default function ReviewScreen() {
     setLoading(true);
     setError(null);
     try {
-      const [s, st] = await Promise.all([
+      const [s, st, up] = await Promise.all([
         getReviewStats(),
         getStreak().catch(() => null),
+        getUpcomingReviews().catch(() => []),
       ]);
       setStats(s);
       setStreak(st);
+      setUpcoming(up);
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load review stats');
     } finally {
@@ -178,14 +184,14 @@ export default function ReviewScreen() {
     return <DoneScreen results={sessionResults} originalTotal={originalTotal} streak={streak} onBack={() => setStage('entry')} />;
   }
 
-  return <EntryScreen stats={stats} streak={streak} error={error} onStart={startSession} />;
+  return <EntryScreen stats={stats} streak={streak} upcoming={upcoming} error={error} onStart={startSession} />;
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────
 
 function EntryScreen({
-  stats, streak, error, onStart,
-}: { stats: ReviewStats | null; streak: Streak | null; error: string | null; onStart: () => void }) {
+  stats, streak, upcoming, error, onStart,
+}: { stats: ReviewStats | null; streak: Streak | null; upcoming: UpcomingDay[]; error: string | null; onStart: () => void }) {
   const router = useRouter();
   const { colors: colorTheme } = useColorTheme();
   const hasDue = (stats?.dueToday ?? 0) > 0;
@@ -228,7 +234,7 @@ function EntryScreen({
           </View>
         )}
 
-        <View className="flex-row gap-3 mb-8">
+        <View className="flex-row gap-3 mb-6">
           <Metric label="Due today" value={String(stats?.dueToday ?? 0)} accent={hasDue} />
           <Metric label="In repertoire" value={String(stats?.totalLearned ?? 0)} />
           <Metric
@@ -236,6 +242,8 @@ function EntryScreen({
             value={stats?.retention === null ? '—' : `${stats?.retention ?? 0}%`}
           />
         </View>
+
+        <ForecastTimeline days={upcoming} colors={colorTheme} />
 
         {hasDue ? (
           <Pressable
@@ -261,6 +269,41 @@ function EntryScreen({
         )}
       </ScrollView>
     </AppShell>
+  );
+}
+
+function ForecastTimeline({ days, colors }: { days: UpcomingDay[]; colors: ColorTheme }) {
+  if (days.length === 0) return null;
+  const max = Math.max(...days.map(d => d.count), 1);
+  const BAR_MAX_H = 48;
+  return (
+    <View className="mb-6">
+      <Text className="text-content-muted text-xs uppercase mb-3">Coming up</Text>
+      <View className="flex-row gap-1.5 items-end">
+        {days.map(({ date, count }) => {
+          const [y, m, d] = date.split('-').map(Number);
+          const label = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short' });
+          const barH = count === 0 ? 2 : Math.max(6, Math.round((count / max) * BAR_MAX_H));
+          return (
+            <View key={date} className="flex-1 items-center gap-1">
+              <Text className="text-content-muted" style={{ fontSize: 11, height: 16, textAlign: 'center' }}>
+                {count > 0 ? String(count) : ''}
+              </Text>
+              <View style={{ height: BAR_MAX_H, width: '100%', justifyContent: 'flex-end' }}>
+                <View
+                  style={{
+                    height: barH,
+                    borderRadius: 2,
+                    backgroundColor: count > 0 ? colors.accent.default + '66' : colors.border.default + '66',
+                  }}
+                />
+              </View>
+              <Text className="text-content-muted" style={{ fontSize: 10 }}>{label}</Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
   );
 }
 
