@@ -316,7 +316,6 @@ function ReviewSession({
       result = null;
     }
     if (!result) {
-      showBanner('Invalid move', 'err');
       return false;
     }
     const san = result.san;

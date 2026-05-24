@@ -8,6 +8,8 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "splash": {
+      "image": "./assets/pawnki-logo.png",
+      "resizeMode": "contain",
       "backgroundColor": "#0f1117"
     },
     "ios": {

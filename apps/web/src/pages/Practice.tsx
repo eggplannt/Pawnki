@@ -249,9 +249,9 @@ export default function Practice() {
       result = null;
     }
     if (!result) {
-      showBanner('Invalid Move', 'err');
       return false;
     }
+    const wasRequeue = session.phase === 'requeue';
     const out = attemptMove(session, result.san);
     setSession(out.session);
     if (out.verdict === 'correct') {
@@ -269,6 +269,11 @@ export default function Practice() {
     } else if (out.verdict === 'wrong-mode') {
       showBanner(out.reason ?? 'Not allowed in this mode.', 'warn');
     }
+    // Requeue is flashcard-style: a correct answer never advances the board
+    // to "after the move" — we either jump to the next requeue parent or
+    // transition to complete. Reject the drop visually so the piece snaps
+    // back to source instead of stranding on the drop square.
+    if (wasRequeue) return false;
     return out.verdict === 'correct';
   }, [session, mode, showBanner]);
 
@@ -368,6 +373,9 @@ export default function Practice() {
   const doneArrows = useMemo(() => {
     const out: Array<{ startSquare: string; endSquare: string; color: string }> = [];
     if (!session || session.status !== 'awaiting-user' || mode === "learn") return out;
+    // During requeue the user is re-prompting a single specific position;
+    // "already-done this session" arrows would be noise here.
+    if (session.phase === 'requeue') return out;
     const sideAtFen = session.currentNode.fen.split(' ')[1] === 'w' ? 'white' : 'black';
     if (sideAtFen !== session.options.userColor) return out;
     for (const c of session.currentNode.children ?? []) {
