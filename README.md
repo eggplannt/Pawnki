@@ -27,7 +27,7 @@ Licensed under **Apache 2.0**.
 - **Opening database** — browse master-game frequencies for the position you're studying
 - **Computer analysis** — Stockfish (WASM on web, native on Android) for evaluation + best-move hints in the tree builder and review
 
-### Not planned for v1
+### Not planned for v0.0.1
 
 - Hosting story (web deployment + Supabase project provisioning docs are still TBD)
 - Custom piece sets
