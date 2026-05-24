@@ -4,6 +4,7 @@ import { mdiChessPawn, mdiSwordCross, mdiCog, mdiWeatherSunny, mdiWeatherNight, 
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme } from '@/hooks/useColorTheme';
 import { PawnkiLogo, PawnkiIcon } from '@/components/Logo';
+import { BannerAd } from '@/components/BannerAd';
 
 const NAV_ITEMS = [
   { label: 'Library',  to: '/library',  icon: mdiChessPawn },
@@ -23,9 +24,12 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div className="flex flex-col lg:flex-row h-full">
       <Sidebar />
-      <MobileHeader />
-      <main className="flex-1 overflow-auto">{children}</main>
-      <BottomNav />
+      <div className="flex flex-col flex-1 min-h-0 min-w-0">
+        <MobileHeader />
+        <main className="flex-1 overflow-auto">{children}</main>
+        <BannerAd />
+        <BottomNav />
+      </div>
     </div>
   );
 }

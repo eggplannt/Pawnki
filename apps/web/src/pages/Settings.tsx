@@ -1,16 +1,30 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Icon from '@mdi/react';
-import { mdiThemeLightDark, mdiWeatherSunny, mdiWeatherNight } from '@mdi/js';
+import { mdiThemeLightDark, mdiWeatherSunny, mdiWeatherNight, mdiStar, mdiStarOutline, mdiCheck } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme, type ThemePref, type BoardPaletteKey } from '@/hooks/useColorTheme';
 import { useReviewOrder, type ReviewOrder } from '@/hooks/useReviewOrder';
-import { boardPalettes, BOARD_PALETTE_KEYS, deleteMyAccount } from '@pawnki/shared';
+import { boardPalettes, BOARD_PALETTE_KEYS, deleteMyAccount, usePremium } from '@pawnki/shared';
+import { supabase } from '@/lib/supabase';
 
 const THEME_OPTIONS: { value: ThemePref; label: string; icon: string }[] = [
   { value: 'system', label: 'System', icon: mdiThemeLightDark },
   { value: 'light',  label: 'Light',  icon: mdiWeatherSunny },
   { value: 'dark',   label: 'Dark',   icon: mdiWeatherNight },
+];
+
+type PriceKey = 'annual' | 'monthly';
+
+const PRICES: Record<PriceKey, { id: string; label: string; amount: string; sub: string }> = {
+  annual:  { id: import.meta.env.VITE_STRIPE_PRICE_ANNUAL  as string, label: 'Annual',  amount: '$30/yr', sub: 'Save 38%' },
+  monthly: { id: import.meta.env.VITE_STRIPE_PRICE_MONTHLY as string, label: 'Monthly', amount: '$4/mo',  sub: '' },
+};
+
+const PREMIUM_BENEFITS = [
+  'Zero ads — ever',
+  'Support independent chess tooling',
 ];
 
 const REVIEW_ORDER_OPTIONS: { value: ReviewOrder; label: string; desc: string }[] = [
@@ -27,6 +41,48 @@ export default function Settings() {
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const { isPremium, loading: premiumLoading, refetch: refetchPremium } = usePremium();
+  const [selectedPrice, setSelectedPrice] = useState<PriceKey>('annual');
+  const [stripeLoading, setStripeLoading] = useState(false);
+  const [stripeError, setStripeError] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const justUpgraded = searchParams.get('upgraded') === '1';
+
+  // After a successful Stripe checkout, refetch premium status and clean up the URL.
+  useEffect(() => {
+    if (!justUpgraded) return;
+    refetchPremium();
+    setSearchParams({}, { replace: true });
+  }, [justUpgraded, refetchPremium, setSearchParams]);
+
+  async function handleSubscribe() {
+    setStripeLoading(true);
+    setStripeError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke('create-checkout-session', {
+        body: { priceId: PRICES[selectedPrice].id },
+      });
+      if (error) throw error;
+      window.location.href = data.url;
+    } catch (e: any) {
+      setStripeError(e?.message ?? 'Could not start checkout. Try again.');
+      setStripeLoading(false);
+    }
+  }
+
+  async function handleManage() {
+    setStripeLoading(true);
+    setStripeError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke('create-portal-session', {});
+      if (error) throw error;
+      window.location.href = data.url;
+    } catch (e: any) {
+      setStripeError(e?.message ?? 'Could not open billing portal. Try again.');
+      setStripeLoading(false);
+    }
+  }
 
   async function handleDeleteAccount() {
     setDeleting(true);
@@ -48,6 +104,79 @@ export default function Settings() {
         {user && (
           <p className="text-content-secondary text-sm mb-8">{user.email}</p>
         )}
+
+        {/* ── Premium ─────────────────────────────────────────────── */}
+        <section id="premium" className="mb-8">
+          <h2 className="text-content-muted text-xs font-medium uppercase tracking-wider mb-3 flex items-center gap-1.5">
+            <Icon path={mdiStarOutline} size={0.75} />
+            Premium
+          </h2>
+
+          {premiumLoading ? (
+            <div className="h-24 rounded-xl bg-bg-surface border border-border animate-pulse" />
+          ) : isPremium ? (
+            <div className="rounded-xl border border-accent/30 bg-accent/5 p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <Icon path={mdiStar} size={0.85} className="text-accent" />
+                <span className="text-content-primary font-medium text-sm">You're on Premium — thank you!</span>
+              </div>
+              <p className="text-content-muted text-xs mb-3">All ads are removed. You can manage or cancel your subscription at any time.</p>
+              {stripeError && <p className="text-danger text-xs mb-2">{stripeError}</p>}
+              <button
+                onClick={handleManage}
+                disabled={stripeLoading}
+                className="text-sm text-content-secondary border border-border rounded-lg px-4 py-2 hover:bg-bg-surface transition-colors disabled:opacity-50"
+              >
+                {stripeLoading ? 'Loading…' : 'Manage subscription'}
+              </button>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-border bg-bg-surface p-4">
+              {justUpgraded && (
+                <p className="text-accent text-sm mb-3 flex items-center gap-1.5">
+                  <Icon path={mdiCheck} size={0.75} />
+                  Subscription active — ads removed!
+                </p>
+              )}
+              <ul className="mb-4 flex flex-col gap-1.5">
+                {PREMIUM_BENEFITS.map((b) => (
+                  <li key={b} className="flex items-center gap-2 text-content-secondary text-sm">
+                    <Icon path={mdiCheck} size={0.65} className="text-accent flex-shrink-0" />
+                    {b}
+                  </li>
+                ))}
+              </ul>
+
+              {/* Price picker */}
+              <div className="flex gap-2 mb-4">
+                {(Object.entries(PRICES) as [PriceKey, typeof PRICES[PriceKey]][]).map(([key, price]) => (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedPrice(key)}
+                    className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors ${
+                      selectedPrice === key ? 'border-accent bg-accent/5' : 'border-border hover:border-accent/40'
+                    }`}
+                  >
+                    <div className={`text-sm font-medium ${selectedPrice === key ? 'text-accent' : 'text-content-primary'}`}>
+                      {price.label}
+                    </div>
+                    <div className="text-content-muted text-xs">{price.amount}</div>
+                    {price.sub && <div className="text-accent text-xs font-medium">{price.sub}</div>}
+                  </button>
+                ))}
+              </div>
+
+              {stripeError && <p className="text-danger text-xs mb-2">{stripeError}</p>}
+              <button
+                onClick={handleSubscribe}
+                disabled={stripeLoading}
+                className="w-full py-2.5 rounded-lg bg-accent text-bg-base font-medium text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
+              >
+                {stripeLoading ? 'Redirecting…' : `Subscribe — ${PRICES[selectedPrice].amount}`}
+              </button>
+            </div>
+          )}
+        </section>
 
         <section className="mb-8">
           <h2 className="text-content-muted text-xs font-medium uppercase tracking-wider mb-3">Appearance</h2>

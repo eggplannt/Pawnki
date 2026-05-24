@@ -8,3 +8,4 @@ export * from './lib/openings';
 export * from './lib/streaks';
 export * from './lib/account';
 export { initDb } from './lib/db';
+export { configurePremium, isSelfHosted, PremiumProvider, usePremium, useShowAds } from './lib/premium';
