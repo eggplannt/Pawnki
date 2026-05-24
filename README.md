@@ -77,18 +77,14 @@ This boots local Postgres + Auth on `127.0.0.1:54321` and applies all migrations
 
 ### 3. Configure environment
 
+Each app has its own `.env.example` next to the file it templates:
+
 ```bash
-cp apps/web/.env.example apps/web/.env.local       # if you have one; otherwise create it
+cp apps/web/.env.example   apps/web/.env.local
+cp apps/expo/.env.example  apps/expo/.env.local
 ```
 
-The web app needs:
-
-```
-VITE_SUPABASE_URL=http://127.0.0.1:54321
-VITE_SUPABASE_PUBLISHABLE_KEY=<sb_publishable_... from `supabase status`>
-```
-
-For Expo, the same values go in `apps/expo/.env.local` as `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
+Fill in `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` (web) and `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (Expo) with the values from `supabase status`.
 
 ### 4. Google OAuth (optional for local-only testing)
 
@@ -96,7 +92,11 @@ For Expo, the same values go in `apps/expo/.env.local` as `EXPO_PUBLIC_SUPABASE_
 2. Create an **OAuth 2.0 Client ID** (Web application)
 3. Add **Authorized redirect URIs** for Supabase's OAuth proxy:
    - Local: `http://127.0.0.1:54321/auth/v1/callback`
-4. Drop the client ID + secret into `supabase/config.toml` under `[auth.external.google]`, then `supabase stop && supabase start` to pick up changes.
+4. Copy `supabase/.env.example` to `supabase/.env` and fill in your client ID and secret:
+   ```bash
+   cp supabase/.env.example supabase/.env
+   ```
+   Then `supabase stop && supabase start` to pick up the new values.
 
 ### 5. Run the apps
 
