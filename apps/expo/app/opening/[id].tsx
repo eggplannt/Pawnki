@@ -231,14 +231,13 @@ export default function OpeningDetailScreen() {
   const [transChoice, setTransChoice] = useState<TransChoice | null>(null);
   const [confirmCanonical, setConfirmCanonical] = useState<TransChoice | null>(null);
   const [transTargets, setTransTargets] = useState<Map<string, TargetInfo>>(new Map());
-  const [panelMode, setPanelMode] = useState<'moves' | 'links'>('moves');
+  const [panelMode, setPanelMode] = useState<'moves' | 'links' | 'database' | 'analysis'>('moves');
   const [crossSwitch, setCrossSwitch] = useState<{ targetInfo: TargetInfo; fromNodeId: string } | null>(null);
   const [currentHasTrans, setCurrentHasTrans] = useState(false);
   const [learnedNodeIds, setLearnedNodeIds] = useState<Set<string>>(new Set());
   const [crossLearnedPositionKeys, setCrossLearnedPositionKeys] = useState<Set<string>>(new Set());
   const [startMode, setStartMode] = useState<'learn' | 'practice' | 'unlearn' | null>(null);
   const [randomOrder, setRandomOrder] = useState(false);
-  const [overflowOpen, setOverflowOpen] = useState(false);
   const [nodeActionMenu, setNodeActionMenu] = useState<Node | null>(null);
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
   const [linkConflict, setLinkConflict] = useState<IntraLinkConflict | null>(null);
@@ -1003,60 +1002,23 @@ export default function OpeningDetailScreen() {
         >
           <Text className={`text-xs font-medium ${hasLearned ? 'text-danger' : 'text-content-muted'}`}>Unlearn</Text>
         </Pressable>
-        {/* Overflow menu */}
+        {/* Import PGN */}
         <Pressable
-          onPress={() => setOverflowOpen(true)}
-          className="w-8 h-8 items-center justify-center rounded-lg active:bg-bg-elevated"
+          onPress={() => { setPgnText(''); setImportError(null); setImportProgress(null); setPgnOpen(true); }}
+          className="px-2 py-1 rounded-md bg-bg-elevated active:bg-bg-surface"
         >
-          <MaterialCommunityIcons name="dots-vertical" size={20} color={colorTheme.content.muted} />
+          <Text className="text-xs font-medium text-content-secondary">Import PGN</Text>
+        </Pressable>
+        {/* Export PGN */}
+        <Pressable
+          onPress={() => { setExportCopied(false); setPgnExportOpen(true); }}
+          disabled={!tree}
+          className="px-2 py-1 rounded-md bg-bg-elevated active:bg-bg-surface"
+          style={{ opacity: tree ? 1 : 0.4 }}
+        >
+          <Text className="text-xs font-medium text-content-secondary">Export PGN</Text>
         </Pressable>
       </View>
-
-      {/* Overflow menu modal */}
-      <Modal
-        visible={overflowOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setOverflowOpen(false)}
-      >
-        <Pressable
-          className="flex-1"
-          style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
-          onPress={() => setOverflowOpen(false)}
-        >
-          <View className="absolute top-16 right-3 bg-bg-elevated border border-border rounded-xl overflow-hidden shadow-lg" style={{ minWidth: 180 }}>
-            <Pressable
-              onPress={() => { setOverflowOpen(false); setPgnText(''); setImportError(null); setImportProgress(null); setPgnOpen(true); }}
-              className="px-4 py-3 active:bg-bg-surface flex-row items-center gap-2"
-            >
-              <MaterialCommunityIcons name="file-import-outline" size={16} color={colorTheme.accent.default} />
-              <Text className="text-content-primary text-sm">Import / Merge PGN</Text>
-            </Pressable>
-            <View className="h-px bg-border" />
-            <Pressable
-              onPress={() => { setOverflowOpen(false); setExportCopied(false); setPgnExportOpen(true); }}
-              disabled={!tree}
-              className="px-4 py-3 active:bg-bg-surface flex-row items-center gap-2"
-              style={{ opacity: tree ? 1 : 0.4 }}
-            >
-              <MaterialCommunityIcons name="file-export-outline" size={16} color={colorTheme.accent.default} />
-              <Text className="text-content-primary text-sm">Export PGN</Text>
-            </Pressable>
-            <View className="h-px bg-border" />
-            <View className="px-4 py-3 flex-row items-center gap-2 opacity-40">
-              <MaterialCommunityIcons name="database-outline" size={16} color={colorTheme.content.muted} />
-              <Text className="text-content-muted text-sm">Database</Text>
-              <Text className="text-content-muted text-[9px] uppercase ml-1">soon</Text>
-            </View>
-            <View className="h-px bg-border" />
-            <View className="px-4 py-3 flex-row items-center gap-2 opacity-40">
-              <MaterialCommunityIcons name="magnify-scan" size={16} color={colorTheme.content.muted} />
-              <Text className="text-content-muted text-sm">Analysis</Text>
-              <Text className="text-content-muted text-[9px] uppercase ml-1">soon</Text>
-            </View>
-          </View>
-        </Pressable>
-      </Modal>
 
       {/* Board */}
       <View className="items-center px-3">
@@ -1125,6 +1087,24 @@ export default function OpeningDetailScreen() {
               Links {linkEntries.length > 0 ? `(${linkEntries.length})` : ''}
             </Text>
           </Pressable>
+          <Pressable
+            onPress={() => setPanelMode('database')}
+            className="flex-row items-center gap-1 px-2 py-1 rounded-md"
+            style={{ backgroundColor: panelMode === 'database' ? colorTheme.bg.elevated : 'transparent' }}
+          >
+            <MaterialCommunityIcons name="database-outline" size={12} color={colorTheme.content.muted} />
+            <Text className="text-content-muted text-xs font-medium uppercase tracking-wider">DB</Text>
+            <Text className="text-content-muted text-[8px] uppercase">soon</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setPanelMode('analysis')}
+            className="flex-row items-center gap-1 px-2 py-1 rounded-md"
+            style={{ backgroundColor: panelMode === 'analysis' ? colorTheme.bg.elevated : 'transparent' }}
+          >
+            <MaterialCommunityIcons name="magnify-scan" size={12} color={colorTheme.content.muted} />
+            <Text className="text-content-muted text-xs font-medium uppercase tracking-wider">Analysis</Text>
+            <Text className="text-content-muted text-[8px] uppercase">soon</Text>
+          </Pressable>
           <View style={{ flex: 1 }} />
           {currentNode && !isRoot && panelMode === 'moves' && (
             <>
@@ -1168,7 +1148,7 @@ export default function OpeningDetailScreen() {
               <ActivityIndicator size="small" color={colorTheme.accent.default} />
             </View>
           )
-        ) : (
+        ) : panelMode === 'links' ? (
           <LinksPanel
             linkEntries={linkEntries}
             targets={transTargets}
@@ -1181,6 +1161,12 @@ export default function OpeningDetailScreen() {
             onAbsorb={handleAbsorbCross}
             disabled={saving}
           />
+        ) : (
+          <View className="flex-1 items-center justify-center">
+            <Text className="text-content-muted text-sm">
+              {panelMode === 'database' ? 'Database coming soon' : 'Analysis coming soon'}
+            </Text>
+          </View>
         )}
       </View>
 

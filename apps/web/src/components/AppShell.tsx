@@ -41,7 +41,7 @@ function Sidebar() {
   return (
     <aside className="hidden lg:flex w-56 flex-col bg-bg-surface border-r border-border py-6 shrink-0">
       <div className="px-5 mb-8">
-        <PawnkiLogo size="md" />
+        <PawnkiLogo size="sm" align="end" />
       </div>
 
       <nav className="flex-1 px-3 flex flex-col gap-0.5">

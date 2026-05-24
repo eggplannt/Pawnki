@@ -42,7 +42,7 @@ interface GradeResult {
 }
 
 const QUALITIES: Array<{ q: Quality; label: string; desc: string; tone: 'danger' | 'gold' | 'accent' | 'accentBright' }> = [
-  { q: 1, label: 'Missed', desc: 'Missed it',           tone: 'danger' },
+  { q: 1, label: 'Again', desc: 'Missed it',           tone: 'danger' },
   { q: 2, label: 'Hard',  desc: 'Recalled with effort', tone: 'gold' },
   { q: 4, label: 'Good',  desc: 'Got it',               tone: 'accent' },
   { q: 5, label: 'Easy',  desc: 'Effortless',           tone: 'accentBright' },
@@ -114,12 +114,12 @@ export default function ReviewScreen() {
     }
   }
 
-  // Quality < 3 (Again, Hard): don't persist; requeue at end.
-  // Quality >= 3 (Good, Easy): persist via SM-2 and advance.
+  // Quality === 1 (Again): don't persist; requeue at end.
+  // Quality >= 2 (Hard, Good, Easy): persist via SM-2 and advance.
   async function handleGraded(quality: Quality, wrongCount: number) {
     const current = items[idx];
     if (!current) return;
-    const requeued = quality < 3;
+    const requeued = quality === 1;
     setSessionResults((r) => [...r, { reviewId: current.review.id, quality, wrongCount, requeued }]);
     if (requeued) {
       setItems((arr) => [...arr, current]);
@@ -148,6 +148,17 @@ export default function ReviewScreen() {
 
   if (stage === 'session' && idx < items.length) {
     const finalized = sessionResults.filter((r) => !r.requeued).length;
+    // Once the user has voluntarily Miss/Hard'd a position in this session, lock
+    // the ceiling at that grade — they can't claim Good/Easy on the retry. Only
+    // q<3 grades count: a Good/Easy that was auto-requeued by a save failure is
+    // not the user's fault and shouldn't cap the retry.
+    const currentReviewId = items[idx].review.id;
+    let maxQuality: Quality = 5;
+    for (const r of sessionResults) {
+      if (r.reviewId === currentReviewId && r.quality < 3 && r.quality < maxQuality) {
+        maxQuality = r.quality;
+      }
+    }
     return (
       <ReviewSession
         key={`${items[idx].review.id}-${idx}`}
@@ -155,6 +166,7 @@ export default function ReviewScreen() {
         finalized={finalized}
         originalTotal={originalTotal}
         sessionError={sessionError}
+        maxQuality={maxQuality}
         onClearError={() => setSessionError(null)}
         onGraded={handleGraded}
         onQuit={() => { setStage('entry'); void loadEntry(); }}
@@ -266,12 +278,15 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
 // ── Session ───────────────────────────────────────────────────────────────
 
 function ReviewSession({
-  item, finalized, originalTotal, sessionError, onClearError, onGraded, onQuit,
+  item, finalized, originalTotal, sessionError, maxQuality, onClearError, onGraded, onQuit,
 }: {
   item: ReviewItem;
   finalized: number;
   originalTotal: number;
   sessionError: string | null;
+  /** Ceiling on selectable grade — lowered to the user's previous Miss/Hard
+   *  for this position in the current session so retries can't inflate. */
+  maxQuality: Quality;
   onClearError: () => void;
   onGraded: (quality: Quality, wrongCount: number) => Promise<void>;
   onQuit: () => void;
@@ -462,15 +477,15 @@ function ReviewSession({
       {/* Grade buttons */}
       {attempt.kind === 'revealed' && (
         <View className="mx-4 mt-3">
-          {hintLevel > 0 && (
+          {maxQuality < 5 && (
             <Text className="text-content-muted text-xs mb-2">
-              You used a hint — only "Missed" is available so this position comes back soon.
+              You previously {maxQuality === 1 ? 'missed' : 'struggled with'} this position — grades above that are locked for this session.
             </Text>
           )}
           <View className="flex-row gap-2">
             {QUALITIES.map(({ q, label, desc, tone }) => {
-              const lockedByHint = hintLevel > 0 && q !== 1;
-              const disabled = grading || lockedByHint;
+              const lockedByCap = q > maxQuality;
+              const disabled = grading || lockedByCap;
               const tc = toneClasses(tone);
               return (
                 <Pressable

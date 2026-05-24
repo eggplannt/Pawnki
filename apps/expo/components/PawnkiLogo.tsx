@@ -1,7 +1,6 @@
 import { View, Text, Image } from 'react-native';
 
-// To swap the logo: replace assets/logo.png with the new PNG.
-const logoSource = require('@/assets/logo.png');
+const logoSource = require('@/assets/pawnki-logo.png');
 
 const ICON_SIZES = { sm: 20, md: 28, lg: 40, xl: 56 };
 const TEXT_SIZES = { sm: 16, md: 20, lg: 30, xl: 48 };

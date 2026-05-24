@@ -4,7 +4,7 @@ import { useNavHistory } from '@/hooks/useNavHistory';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import Icon from '@mdi/react';
-import { mdiChessKing, mdiDelete } from '@mdi/js';
+import { mdiChessKing, mdiDelete, mdiDatabaseOutline, mdiMagnifyScan } from '@mdi/js';
 import { AppShell } from '@/components/AppShell';
 import {
   getOpening, getNodes, buildTree,
@@ -270,7 +270,7 @@ export default function OpeningDetail() {
 
   // Resolved targets for every link node in this opening — target-id → info.
   const [transTargets, setTransTargets] = useState<Map<string, LinkTargetInfo>>(new Map());
-  const [showTransPanel, setShowTransPanel] = useState(false);
+  const [panelMode, setPanelMode] = useState<'pgn' | 'links' | 'database' | 'analysis'>('pgn');
 
   const [showPgnImport, setShowPgnImport] = useState(false);
   const [showPgnExport, setShowPgnExport] = useState(false);
@@ -1070,20 +1070,19 @@ export default function OpeningDetail() {
                 Unlearn
               </button>
               <button
-                disabled
-                title="Master-game frequencies for this position — coming soon"
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-bg-elevated text-content-muted cursor-not-allowed inline-flex items-center gap-1"
+                onClick={() => { setShowPgnExport(true); setExportCopied(false); }}
+                disabled={!tree}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors bg-bg-elevated text-content-secondary hover:text-content-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Export PGN"
               >
-                Database
-                <span className="text-[0.6rem] uppercase tracking-wider opacity-60">soon</span>
+                Export PGN
               </button>
               <button
-                disabled
-                title="Engine evaluation and best-move hints — coming soon"
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-bg-elevated text-content-muted cursor-not-allowed inline-flex items-center gap-1"
+                onClick={() => { setShowPgnImport(true); setImportError(null); setPgnText(''); setImportProgress(null); }}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors bg-bg-elevated text-content-secondary hover:text-content-primary"
+                title="Import/Merge PGN"
               >
-                Analysis
-                <span className="text-[0.6rem] uppercase tracking-wider opacity-60">soon</span>
+                Import PGN
               </button>
             </div>
           </div>
@@ -1171,14 +1170,14 @@ export default function OpeningDetail() {
           {/* Panel header */}
           <div className="px-4 py-3 border-b border-border shrink-0 flex items-center gap-2">
             <button
-              onClick={() => setShowTransPanel(false)}
-              className={`text-xs font-medium uppercase tracking-wider transition-colors ${showTransPanel ? 'text-content-muted hover:text-content-secondary' : 'text-content-secondary'}`}
+              onClick={() => setPanelMode('pgn')}
+              className={`text-xs font-medium uppercase tracking-wider transition-colors ${panelMode === 'pgn' ? 'text-content-secondary' : 'text-content-muted hover:text-content-secondary'}`}
             >
               <span className="text-accent text-xs mr-1">♟</span>PGN
             </button>
             <button
-              onClick={() => setShowTransPanel(true)}
-              className={`text-xs font-medium uppercase tracking-wider transition-colors ${showTransPanel ? 'text-content-secondary' : 'text-content-muted hover:text-content-secondary'}`}
+              onClick={() => setPanelMode('links')}
+              className={`text-xs font-medium uppercase tracking-wider transition-colors ${panelMode === 'links' ? 'text-content-secondary' : 'text-content-muted hover:text-content-secondary'}`}
               title="View transposition links"
             >
               <span className="text-accent text-xs mr-1">⇄</span>Links
@@ -1186,25 +1185,26 @@ export default function OpeningDetail() {
                 <span className="ml-1 px-1 rounded bg-accent/20 text-accent text-[0.65rem] align-middle">{linkEntries.length}</span>
               )}
             </button>
-            <div className="ml-auto flex items-center gap-3">
-              <button
-                onClick={() => { setShowPgnExport(true); setExportCopied(false); }}
-                disabled={!tree}
-                className="text-xs text-accent hover:text-accent-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Export PGN"
-              >
-                Export PGN
-              </button>
-              <button
-                onClick={() => { setShowPgnImport(true); setImportError(null); setPgnText(''); setImportProgress(null); }}
-                className="text-xs text-accent hover:text-accent-hover transition-colors"
-                title="Import/Merge PGN"
-              >
-                Import/Merge PGN
-              </button>
-            </div>
+            <button
+              onClick={() => setPanelMode('database')}
+              className={`text-xs font-medium uppercase tracking-wider transition-colors inline-flex items-center gap-1 ${panelMode === 'database' ? 'text-content-secondary' : 'text-content-muted hover:text-content-secondary'}`}
+              title="Master-game frequencies — coming soon"
+            >
+              <Icon path={mdiDatabaseOutline} size={0.6} />
+              Database
+              <span className="text-[0.6rem] uppercase opacity-50">soon</span>
+            </button>
+            <button
+              onClick={() => setPanelMode('analysis')}
+              className={`text-xs font-medium uppercase tracking-wider transition-colors inline-flex items-center gap-1 ${panelMode === 'analysis' ? 'text-content-secondary' : 'text-content-muted hover:text-content-secondary'}`}
+              title="Engine evaluation — coming soon"
+            >
+              <Icon path={mdiMagnifyScan} size={0.6} />
+              Analysis
+              <span className="text-[0.6rem] uppercase opacity-50">soon</span>
+            </button>
           </div>
-          {showTransPanel ? (
+          {panelMode === 'links' ? (
             <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 min-h-0">
               <TranspositionsPanel
                 links={linkEntries}
@@ -1212,8 +1212,8 @@ export default function OpeningDetail() {
                 currentOpeningId={id!}
                 parentMap={parentMap}
                 nodeMap={nodeMap}
-                onGoTo={(n) => { selectNode(n); setShowTransPanel(false); }}
-                onEdit={(n) => { openTransReprompt(n); setShowTransPanel(false); }}
+                onGoTo={(n) => { selectNode(n); setPanelMode('pgn'); }}
+                onEdit={(n) => { openTransReprompt(n); setPanelMode('pgn'); }}
                 onUnlink={async (n) => {
                   setSaving(true);
                   try {
@@ -1229,6 +1229,14 @@ export default function OpeningDetail() {
                   } finally { setSaving(false); }
                 }}
               />
+            </div>
+          ) : panelMode === 'database' ? (
+            <div className="flex-1 flex items-center justify-center p-6 text-content-muted text-sm">
+              Database coming soon
+            </div>
+          ) : panelMode === 'analysis' ? (
+            <div className="flex-1 flex items-center justify-center p-6 text-content-muted text-sm">
+              Analysis coming soon
             </div>
           ) : (
             <div ref={moveListRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 pb-14 min-h-0">
@@ -1802,7 +1810,7 @@ export default function OpeningDetail() {
               </button>
               <button
                 onClick={() => {
-                  setShowTransPanel(true);
+                  setPanelMode('links');
                   setImportTranspositionCount(null);
                 }}
                 className="flex-1 py-2 rounded-lg bg-accent text-bg-base font-medium text-sm hover:bg-accent-hover transition-colors"

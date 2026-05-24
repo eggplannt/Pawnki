@@ -39,7 +39,7 @@ export default function Login() {
         {/* Left — branding */}
         <div className="max-w-md text-center md:text-left">
           <div className="flex justify-center md:justify-start mb-6">
-            <PawnkiLogo size="md" />
+            <PawnkiLogo size="xl" align="end" />
           </div>
           <p className="text-content-secondary text-lg md:text-xl leading-8 mb-10">
             Build your opening repertoire.{' '}

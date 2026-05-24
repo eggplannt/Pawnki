@@ -11,11 +11,13 @@
       "backgroundColor": "#0f1117"
     },
     "ios": {
+      "icon": "./assets/icon.png",
       "supportsTablet": true,
       "bundleIdentifier": "com.pawnki.app"
     },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0f1117"
       },
       "package": "com.pawnki.app"
