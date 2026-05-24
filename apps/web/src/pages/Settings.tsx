@@ -18,8 +18,8 @@ const THEME_OPTIONS: { value: ThemePref; label: string; icon: string }[] = [
 type PriceKey = 'annual' | 'monthly';
 
 const PRICES: Record<PriceKey, { id: string; label: string; amount: string; sub: string }> = {
-  annual:  { id: import.meta.env.VITE_STRIPE_PRICE_ANNUAL  as string, label: 'Annual',  amount: '$30/yr', sub: 'Save 38%' },
   monthly: { id: import.meta.env.VITE_STRIPE_PRICE_MONTHLY as string, label: 'Monthly', amount: '$4/mo',  sub: '' },
+  annual:  { id: import.meta.env.VITE_STRIPE_PRICE_ANNUAL  as string, label: 'Annual',  amount: '$30/yr', sub: 'Save 38%' },
 };
 
 const PREMIUM_BENEFITS = [
@@ -43,7 +43,7 @@ export default function Settings() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { isPremium, loading: premiumLoading, refetch: refetchPremium } = usePremium();
-  const [selectedPrice, setSelectedPrice] = useState<PriceKey>('annual');
+  const [selectedPrice, setSelectedPrice] = useState<PriceKey>('monthly');
   const [stripeLoading, setStripeLoading] = useState(false);
   const [stripeError, setStripeError] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
