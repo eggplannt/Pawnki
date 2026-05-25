@@ -721,13 +721,10 @@ function SummaryScreen({
               </button>
             ) : (
               <button
-                onClick={() => {
-                  if (mode === 'practice') onRestart();
-                  else navigate(`/practice/${openingId}?mode=practice`);
-                }}
+                onClick={() => navigate('/review')}
                 className="flex-1 py-2 rounded-lg bg-accent text-bg-base font-medium hover:bg-accent-hover"
               >
-                {mode === 'learn' ? 'Practice more' : 'Practice again'}
+                Review
               </button>
             )}
           </div>
