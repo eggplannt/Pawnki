@@ -559,8 +559,8 @@ export default function OpeningDetailScreen() {
 
   // ── Move handler ─────────────────────────────────────────────────────────
 
-  const handleMove = useCallback(async (move: ChessboardMove) => {
-    if (!currentNode || !id || saving) return;
+  const handleMove = useCallback((move: ChessboardMove): boolean => {
+    if (!currentNode || !id || saving) return false;
     const newFen = move.fen;
 
     // Existing child reaches this exact position — just navigate.
@@ -568,7 +568,7 @@ export default function OpeningDetailScreen() {
     if (existing) {
       setCurrentNode(existing);
       setForwardStack([]);
-      return;
+      return true;
     }
 
     setPendingFen(newFen);
@@ -594,37 +594,40 @@ export default function OpeningDetailScreen() {
     const shouldAutoUnlearn = existingUniqueKidIds.length === 1;
 
     setSaving(true);
-    try {
-      const newNode = await createNode(id, parentId, move.san, move.uci, newFen);
-      if (shouldAutoUnlearn) {
-        await unlearnNodeIds(existingUniqueKidIds);
-      }
-      await reloadTree(newNode.id);
-      if (shouldAutoUnlearn) {
-        const [learned, crossKeys] = await Promise.all([
-          getLearnedNodeIds(id).catch(() => new Set<string>()),
-          getCrossOpeningLearnedPositionKeys(id).catch(() => new Set<string>()),
-        ]);
-        setLearnedNodeIds(learned);
-        setCrossLearnedPositionKeys(crossKeys);
-      }
+    void (async () => {
+      try {
+        const newNode = await createNode(id, parentId, move.san, move.uci, newFen);
+        if (shouldAutoUnlearn) {
+          await unlearnNodeIds(existingUniqueKidIds);
+        }
+        await reloadTree(newNode.id);
+        if (shouldAutoUnlearn) {
+          const [learned, crossKeys] = await Promise.all([
+            getLearnedNodeIds(id).catch(() => new Set<string>()),
+            getCrossOpeningLearnedPositionKeys(id).catch(() => new Set<string>()),
+          ]);
+          setLearnedNodeIds(learned);
+          setCrossLearnedPositionKeys(crossKeys);
+        }
 
-      const intra = await findIntraOpeningTransposition(newFen, id, newNode.id);
-      const cross = intra ? [] : await findTransposition(newFen, id, userPathSans);
+        const intra = await findIntraOpeningTransposition(newFen, id, newNode.id);
+        const cross = intra ? [] : await findTransposition(newFen, id, userPathSans);
 
-      if (intra || cross.length > 0) {
-        setTransChoice({
-          newNodeId: newNode.id,
-          newNodeFen: newFen,
-          parentId,
-          intra,
-          cross,
-          isReprompt: false,
-        });
+        if (intra || cross.length > 0) {
+          setTransChoice({
+            newNodeId: newNode.id,
+            newNodeFen: newFen,
+            parentId,
+            intra,
+            cross,
+            isReprompt: false,
+          });
+        }
+      } finally {
+        setSaving(false);
       }
-    } finally {
-      setSaving(false);
-    }
+    })();
+    return true;
   }, [currentNode, id, saving, reloadTree, parentMap]);
 
   // ── Transposition reprompt ───────────────────────────────────────────────
