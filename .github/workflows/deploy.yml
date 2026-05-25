@@ -1,8 +1,9 @@
-name: Deploy to Production
+name: Deploy Edge Functions
 
 on:
   push:
-    branches: [main]
+    branches: [staging]
+    tags: ['v*.*.*']
 
 jobs:
   deploy-functions:
