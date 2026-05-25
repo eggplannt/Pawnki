@@ -237,6 +237,9 @@ const AnimatedPiece = memo(forwardRef<AnimatedPieceHandle, AnimatedPieceProps>(f
   const dragY = useSharedValue(0);
   const scale = useSharedValue(1);
   const elevated = useSharedValue(0); // 0/1: drives zIndex, decoupled from scale anim
+  // Set to 1 while a legal drop-settle animation is in flight so onFinalize
+  // doesn't prematurely reset elevated (onFinalize fires right after onEnd).
+  const isSettling = useSharedValue(0);
   // desiredX/Y mirror the piece's logical square's visual pos. The
   // worklet-driven drop-settle / drag-back animations consult these when they
   // finish, in case piece.square changed during the animation (e.g., learn
@@ -340,11 +343,15 @@ const AnimatedPiece = memo(forwardRef<AnimatedPieceHandle, AnimatedPieceProps>(f
           // overlap that a hard snap caused.
           const targetX = vCol * squareSize;
           const targetY = vRow * squareSize;
+          // Mark settle in-flight so onFinalize (which fires right after onEnd)
+          // doesn't prematurely reset elevated and let the useEffect interfere.
+          isSettling.value = 1;
           posX.value = withTiming(targetX, { duration: DROP_SETTLE_MS });
           posY.value = withTiming(targetY, { duration: DROP_SETTLE_MS });
           dragX.value = withTiming(0, { duration: DROP_SETTLE_MS });
           dragY.value = withTiming(0, { duration: DROP_SETTLE_MS }, (finished) => {
             'worklet';
+            isSettling.value = 0;
             if (!finished) return;
             elevated.value = 0;
             // If piece.square shifted during the settle (e.g., learn-mode
@@ -379,7 +386,9 @@ const AnimatedPiece = memo(forwardRef<AnimatedPieceHandle, AnimatedPieceProps>(f
       })
       .onFinalize(() => {
         'worklet';
-        if (elevated.value === 1) elevated.value = 0;
+        // Don't reset elevated if a drop-settle is in flight — the settle
+        // callback owns the reset. Only reset for cancelled/interrupted gestures.
+        if (elevated.value === 1 && isSettling.value === 0) elevated.value = 0;
         scale.value = withTiming(1, { duration: SCALE_ANIM_MS });
       });
 
@@ -387,7 +396,7 @@ const AnimatedPiece = memo(forwardRef<AnimatedPieceHandle, AnimatedPieceProps>(f
   }, [
     pieceSquare, squareSize, isWhiteOrient, pColor,
     onTap, onDragStart, onDrop,
-    posX, posY, dragX, dragY, scale, elevated,
+    posX, posY, dragX, dragY, scale, elevated, isSettling,
     desiredX, desiredY,
     grabOffsetX, grabOffsetY,
     legalTargetsSV, indicatorsVisibleSV, dragSideSV,
