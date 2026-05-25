@@ -1,12 +1,11 @@
 [auth]
 enabled = true
 site_url = "env(SITE_URL)"
-additional_redirect_urls = ["env(SITE_URL)/auth/callback", "pawnki://**", "exp://**"]
+additional_redirect_urls = ["pawnki://**", "exp://**"]
 
 [auth.external.google]
 enabled = true
 client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
 secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_SECRET)"
-redirect_uri = "env(OATH_REDIRECT_URI)"
 # Required for PKCE flow on native (skip_nonce_check needed for local Google auth)
 skip_nonce_check = true
