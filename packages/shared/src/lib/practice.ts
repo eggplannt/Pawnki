@@ -336,6 +336,16 @@ export function applicableChildren(session: PracticeSession): Node[] {
   //   return child ? [child] : [];
   // }
 
+  // Requeue phase: only the specific re-queued child is applicable. practicedChildIds
+  // includes this child (it was added during backtracking), so the normal filter below
+  // would wrongly return an empty list — breaking hints and wrong-move feedback.
+  if (session.phase === 'requeue') {
+    const first = session.requeueEntries[0];
+    if (!first) return [];
+    const child = (session.currentNode.children ?? []).find((c) => c.id === first.childId);
+    return child ? [child] : [];
+  }
+
   const { currentNode, options, applicableCounts, practicedChildIds, learnableMap, childOrderMap } = session;
   const childById = new Map((currentNode.children ?? []).map((c) => [c.id, c]));
   const orderedIds = childOrderMap.get(currentNode.id) ?? (currentNode.children ?? []).map((c) => c.id);
