@@ -25,6 +25,8 @@ import {
   showHint,
   finalize,
   applicableChildren,
+  mistakeDecisionPath,
+  mistakeMovePrefix,
   type PracticeSession,
   type PracticeMode,
   type SessionSummary,
@@ -329,6 +331,7 @@ export default function PracticeScreen() {
         openingId={id}
         mode={mode}
         summary={summary}
+        rootNode={session!.options.rootNode}
         onRestart={() => setReloadKey((k) => k + 1)}
         onPractice={() => {
           setSummary(null);
@@ -501,12 +504,13 @@ export default function PracticeScreen() {
 // ── Summary ────────────────────────────────────────────────────────────────
 
 function SummaryScreen({
-  opening, mode, summary, onRestart, onPractice, onDone, onOpenMistake,
+  opening, mode, summary, rootNode, onRestart, onPractice, onDone, onOpenMistake,
 }: {
   opening: Opening;
   openingId: string;
   mode: PracticeMode;
   summary: SessionSummary;
+  rootNode: Node;
   onRestart: () => void;
   onPractice: () => void;
   onDone: () => void;
@@ -535,14 +539,17 @@ function SummaryScreen({
             <Text className="text-content-primary text-base font-semibold mb-2">Mistakes</Text>
             <View className="gap-2 mb-6">
               {summary.mistakes.map((m, i) => (
-                <View key={i} className="bg-bg-surface border border-border rounded-lg px-3 py-2 flex-row items-center gap-2">
-                  <Text className="text-danger text-sm font-mono">{m.attemptedSan}</Text>
-                  <Text className="text-content-muted text-xs flex-1">
-                    → expected: <Text className="text-content-secondary">{m.expectedSans.join(' / ') || '—'}</Text>
-                  </Text>
-                  <Pressable onPress={() => onOpenMistake(m.nodeId)}>
-                    <Text className="text-accent text-xs">Open</Text>
-                  </Pressable>
+                <View key={i} className="bg-bg-surface border border-border rounded-lg px-3 py-2 gap-1">
+                  {(() => { const path = mistakeDecisionPath(rootNode, m.nodeId); return path ? <Text className="text-content-muted text-xs">{path}</Text> : null; })()}
+                  <View className="flex-row items-center gap-2">
+                    <Text className="text-danger text-sm font-mono">{mistakeMovePrefix(rootNode, m.nodeId)}{m.attemptedSan}</Text>
+                    <Text className="text-content-muted text-xs flex-1">
+                      → expected: <Text className="text-content-secondary">{m.expectedSans.map(s => `${mistakeMovePrefix(rootNode, m.nodeId)}${s}`).join(' / ') || '—'}</Text>
+                    </Text>
+                    <Pressable onPress={() => onOpenMistake(m.nodeId)}>
+                      <Text className="text-accent text-xs">Open</Text>
+                    </Pressable>
+                  </View>
                 </View>
               ))}
             </View>
