@@ -15,6 +15,8 @@ import {
   showHint,
   finalize,
   applicableChildren,
+  mistakeDecisionPath,
+  mistakeMovePrefix,
   type PracticeSession,
   type PracticeMode,
   type SessionSummary,
@@ -450,7 +452,7 @@ export default function Practice() {
     return <PreSessionAd onComplete={() => setAdDone(true)} />;
   }
 
-  if (summary) return <SummaryScreen opening={opening} mode={mode} openingId={id!} summary={summary} onRestart={() => setReloadKey((k) => k + 1)} onPracticeMistakes={mode === 'learn' ? undefined : undefined /* not implemented in v1 */} />;
+  if (summary) return <SummaryScreen opening={opening} mode={mode} openingId={id!} summary={summary} rootNode={session!.options.rootNode} onRestart={() => setReloadKey((k) => k + 1)} onPracticeMistakes={mode === 'learn' ? undefined : undefined /* not implemented in v1 */} />;
 
   const boardFen = session.currentNode.fen;
   const modeBadgeColor = mode === 'learn' ? 'bg-accent/15 text-accent' : 'bg-gold/15 text-gold';
@@ -663,12 +665,13 @@ export default function Practice() {
 // ── Summary ────────────────────────────────────────────────────────────────
 
 function SummaryScreen({
-  opening, openingId, mode, summary, onRestart,
+  opening, openingId, mode, summary, rootNode, onRestart,
 }: {
   opening: Opening;
   openingId: string;
   mode: PracticeMode;
   summary: SessionSummary;
+  rootNode: Node;
   onRestart: () => void;
   onPracticeMistakes?: () => void;
 }) {
@@ -694,16 +697,19 @@ function SummaryScreen({
               <h2 className="text-content-primary text-base font-semibold mb-2">Mistakes</h2>
               <ul className="space-y-2 mb-6">
                 {summary.mistakes.map((m, i) => (
-                  <li key={i} className="bg-bg-surface border border-border rounded-lg px-3 py-2 flex items-center gap-2">
-                    <span className="text-danger text-sm font-mono">{m.attemptedSan}</span>
-                    <span className="text-content-muted text-xs">→ expected: <span className="text-content-secondary">{m.expectedSans.join(' / ') || '—'}</span></span>
-                    <div className="flex-1" />
-                    <button
-                      onClick={() => navigate(`/library/${openingId}?node=${m.nodeId}`)}
-                      className="text-accent text-xs hover:underline"
-                    >
-                      Open
-                    </button>
+                  <li key={i} className="bg-bg-surface border border-border rounded-lg px-3 py-2 flex flex-col gap-1">
+                    {(() => { const path = mistakeDecisionPath(rootNode, m.nodeId); return path ? <span className="text-content-muted text-xs">{path}</span> : null; })()}
+                    <div className="flex items-center gap-2">
+                      <span className="text-danger text-sm font-mono">{mistakeMovePrefix(rootNode, m.nodeId)}{m.attemptedSan}</span>
+                      <span className="text-content-muted text-xs">→ expected: <span className="text-content-secondary">{m.expectedSans.map(s => `${mistakeMovePrefix(rootNode, m.nodeId)}${s}`).join(' / ') || '—'}</span></span>
+                      <div className="flex-1" />
+                      <button
+                        onClick={() => navigate(`/library/${openingId}?node=${m.nodeId}`)}
+                        className="text-accent text-xs hover:underline"
+                      >
+                        Open
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
