@@ -705,6 +705,58 @@ function findNodeById(root: Node, id: string): Node | null {
   return null;
 }
 
+function buildParentMap(root: Node): Map<string, Node> {
+  const map = new Map<string, Node>();
+  function walk(node: Node) {
+    for (const child of node.children ?? []) {
+      map.set(child.id, node);
+      walk(child);
+    }
+  }
+  walk(root);
+  return map;
+}
+
+function getPathNodes(node: Node, parentMap: Map<string, Node>): Node[] {
+  const path: Node[] = [];
+  let cur: Node | undefined = node;
+  while (cur) { path.unshift(cur); cur = parentMap.get(cur.id); }
+  return path;
+}
+
+function nodeMoveSanWithNumber(node: Node): string {
+  if (!node.move_san) return '';
+  const parts = node.fen.split(' ');
+  const moveNum = parseInt(parts[5] ?? '1', 10);
+  const isWhite = parts[1] === 'w';
+  return isWhite ? `${moveNum - 1}…${node.move_san}` : `${moveNum}.${node.move_san}`;
+}
+
+/** Returns the compact decision-path string leading to `nodeId` — only moves
+ *  at branching points are included, matching the transposition-diff display. */
+export function mistakeDecisionPath(rootNode: Node, nodeId: string): string {
+  const target = findNodeById(rootNode, nodeId);
+  if (!target) return '';
+  const parentMap = buildParentMap(rootNode);
+  const path = getPathNodes(target, parentMap);
+  const moves = path.slice(1);
+  const keyMoves = moves.filter((_, i) => {
+    const parent = path[i];
+    return (parent.children?.length ?? 0) > 1 || i === moves.length - 1;
+  });
+  return keyMoves.map(nodeMoveSanWithNumber).filter(Boolean).join(' · ');
+}
+
+/** Returns the move-number prefix for the move played at `nodeId`, e.g. "6." or "5…". */
+export function mistakeMovePrefix(rootNode: Node, nodeId: string): string {
+  const node = findNodeById(rootNode, nodeId);
+  if (!node) return '';
+  const parts = node.fen.split(' ');
+  const moveNum = parseInt(parts[5] ?? '1', 10);
+  const isWhite = parts[1] === 'w';
+  return isWhite ? `${moveNum}.` : `${moveNum}…`;
+}
+
 // ── Hints ───────────────────────────────────────────────────────────────────
 
 export interface HintInfo {

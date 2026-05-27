@@ -45,7 +45,7 @@ class BoardErrorBoundary extends Component<BoardErrorBoundaryProps, { errored: b
 }
 
 const QUALITIES: Array<{ q: Quality; label: string; desc: string; tone: string }> = [
-  { q: 1, label: 'Again', desc: 'Missed it',           tone: 'bg-danger/15 text-danger border-danger/30 hover:bg-danger/25' },
+  { q: 1, label: 'Again', desc: 'Missed it, try again at the end of the review', tone: 'bg-danger/15 text-danger border-danger/30 hover:bg-danger/25' },
   { q: 2, label: 'Hard',  desc: 'Recalled with effort', tone: 'bg-gold/15 text-gold border-gold/30 hover:bg-gold/25' },
   { q: 4, label: 'Good',  desc: 'Got it',               tone: 'bg-accent/15 text-accent border-accent/30 hover:bg-accent/25' },
   { q: 5, label: 'Easy',  desc: 'Effortless',           tone: 'bg-accent/25 text-accent border-accent/40 hover:bg-accent/35' },
@@ -168,10 +168,14 @@ export default function Review() {
     // q<3 grades count: a Good/Easy that was auto-requeued by a save failure is
     // not the user's fault and shouldn't cap the retry.
     const currentReviewId = items[idx].review.id;
+    const requeuedIds = new Set(sessionResults.filter((r) => r.requeued).map((r) => r.reviewId));
+    const isRequeue = requeuedIds.has(currentReviewId);
+    const requeueLeft = items.slice(idx).filter((item) => requeuedIds.has(item.review.id)).length;
     let maxQuality: Quality = 5;
     for (const r of sessionResults) {
       if (r.reviewId === currentReviewId && r.quality < 3 && r.quality < maxQuality) {
-        maxQuality = r.quality;
+        // Requeued positions (Again) allow Hard on retry — the requeue itself is the penalty.
+        maxQuality = (r.requeued ? 2 : r.quality) as Quality;
       }
     }
     return (
@@ -182,6 +186,8 @@ export default function Review() {
         originalTotal={originalTotal}
         sessionError={sessionError}
         maxQuality={maxQuality}
+        isRequeue={isRequeue}
+        requeueLeft={requeueLeft}
         onClearError={() => setSessionError(null)}
         onGraded={handleGraded}
         onQuit={() => { setStage('entry'); void loadEntry(); }}
@@ -318,7 +324,7 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
 // ── Session ───────────────────────────────────────────────────────────────
 
 function ReviewSession({
-  item, finalized, originalTotal, sessionError, maxQuality, onClearError, onGraded, onQuit,
+  item, finalized, originalTotal, sessionError, maxQuality, isRequeue, requeueLeft, onClearError, onGraded, onQuit,
 }: {
   item: ReviewItem;
   /** Number of positions already finalized (graded Good/Easy). */
@@ -329,6 +335,10 @@ function ReviewSession({
   /** Ceiling on selectable grade — lowered to the user's previous Miss/Hard
    *  for this position in the current session so retries can't inflate. */
   maxQuality: Quality;
+  /** Whether the current position is a requeued retry. */
+  isRequeue: boolean;
+  /** Total requeued positions remaining including the current one. */
+  requeueLeft: number;
   onClearError: () => void;
   onGraded: (quality: Quality, wrongCount: number) => Promise<void>;
   onQuit: () => void;
@@ -510,6 +520,11 @@ function ReviewSession({
               {item.opening.name}
             </span>
           </div>
+          {isRequeue && (
+            <span className="px-2 py-0.5 text-xs font-medium rounded bg-gold/15 text-gold shrink-0">
+              Re-attempt · {requeueLeft} left
+            </span>
+          )}
           <span className="text-content-muted text-xs shrink-0" title="Finalized / originally due">
             {finalized} / {originalTotal}
           </span>
