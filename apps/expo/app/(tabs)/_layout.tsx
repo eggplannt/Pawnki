@@ -55,6 +55,8 @@ export default function TabsLayout() {
           ),
         }}
       />
+      {/* Hide nested tool routes from the tab bar (they're reached by push). */}
+      <Tabs.Screen name="tools/vision" options={{ href: null }} />
     </Tabs>
   );
 }

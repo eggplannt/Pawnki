@@ -563,6 +563,13 @@ interface ChessboardProps {
    *  will roll back any optimistic UI. Return `void`/anything else to defer
    *  to FEN-prop reconciliation. */
   onMove?: (move: ChessboardMove) => unknown;
+  /**
+   * If provided, the board switches to "tap-to-select" mode: every square tap
+   * (whether on a piece or an empty square) fires this callback, and the
+   * built-in piece-move logic is bypassed. Used by the Vision Trainer for
+   * answer selection. Mutually exclusive with `onMove` in practice.
+   */
+  onSquareSelect?: (sq: string) => void;
   disabled?: boolean;
   squareStyles?: Record<string, StyleProp<ViewStyle>>;
   darkSquareColor?: string;
@@ -578,6 +585,7 @@ export const Chessboard = memo(function Chessboard({
   fen,
   orientation = 'white',
   onMove,
+  onSquareSelect,
   disabled = false,
   darkSquareColor,
   squareStyles,
@@ -641,6 +649,7 @@ export const Chessboard = memo(function Chessboard({
   const squareSize = boardSize / 8;
 
   const interactive = !disabled && !!onMove;
+  const selectMode = !!onSquareSelect;
   const sideToMove = fen.split(' ')[1] === 'w' ? 'w' : 'b';
 
   const [selected, setSelected] = useState<string | null>(null);
@@ -721,6 +730,8 @@ export const Chessboard = memo(function Chessboard({
   }, [indicatorsVisibleSV]);
 
   const handlePieceTap = useCallback((sq: string) => {
+    // Select-mode short-circuit: piece tap = tap on its square.
+    if (onSquareSelect) { onSquareSelect(sq); return; }
     const { interactive, selected, legalTargets, fen, sideToMove } = ctxRef.current;
     if (!interactive) return;
     if (selected && legalTargets.has(sq) && selected !== sq) {
@@ -738,9 +749,11 @@ export const Chessboard = memo(function Chessboard({
     } else {
       setSelected(null);
     }
-  }, [tryMove, showIndicatorsNow]);
+  }, [tryMove, showIndicatorsNow, onSquareSelect]);
 
   const handleSquareTap = useCallback((sq: string) => {
+    // Select-mode short-circuit: just relay the tap.
+    if (onSquareSelect) { onSquareSelect(sq); return; }
     const { interactive, selected, legalTargets } = ctxRef.current;
     if (!interactive) return;
     if (selected && legalTargets.has(sq)) {
@@ -749,7 +762,7 @@ export const Chessboard = memo(function Chessboard({
       return;
     }
     if (selected) setSelected(null);
-  }, [tryMove]);
+  }, [tryMove, onSquareSelect]);
 
   // Drag start: select so legal-target indicators appear. The piece's pan
   // worklet already gated on dragSideSV, so this only fires for the side
@@ -880,7 +893,7 @@ export const Chessboard = memo(function Chessboard({
         darkColor={resolvedDark}
         squareStyles={squareStyles}
         onSquareTap={handleSquareTap}
-        disabled={!interactive}
+        disabled={!interactive && !selectMode}
       />
 
       {/* Layer 2: selection highlight overlay — separate so toggling
