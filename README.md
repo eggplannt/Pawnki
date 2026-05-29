@@ -2,7 +2,7 @@
 
 > **Alpha.** Core features work end-to-end. Data model and APIs may still shift — back up your PGNs.
 
-A chess opening trainer with Anki-style spaced repetition. Build opening trees from PGN files or by playing moves on the board, drill them with depth-first practice, and reinforce weak positions with a daily SM-2 review session.
+A chess trainer with Anki-style spaced repetition. Primarily an opening trainer — build opening trees from PGN files or by playing moves on the board, drill them with depth-first practice, and reinforce weak positions with a daily SM-2 review session — plus a growing set of tools for the rest of your chess training.
 
 **[pawnki.com](https://pawnki.com)** · [GitHub](https://github.com/eggplannt/Pawnki) · [Android APK](https://github.com/eggplannt/Pawnki/releases)
 

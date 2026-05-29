@@ -7,6 +7,8 @@ import Login from '@/pages/Login';
 import Library from '@/pages/Library';
 import Review from '@/pages/Review';
 import Settings from '@/pages/Settings';
+import Tools from '@/pages/Tools';
+import VisionTrainer from '@/pages/VisionTrainer';
 import OpeningDetail from '@/pages/OpeningDetail';
 import Practice from '@/pages/Practice';
 import AuthCallback from '@/pages/AuthCallback';
@@ -89,6 +91,22 @@ function AppRoutes() {
         element={
           <AuthGuard>
             <Review />
+          </AuthGuard>
+        }
+      />
+      <Route
+        path="/tools"
+        element={
+          <AuthGuard>
+            <Tools />
+          </AuthGuard>
+        }
+      />
+      <Route
+        path="/tools/vision"
+        element={
+          <AuthGuard>
+            <VisionTrainer />
           </AuthGuard>
         }
       />
