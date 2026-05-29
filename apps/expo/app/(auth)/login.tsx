@@ -32,10 +32,10 @@ export default function LoginScreen() {
         </View>
 
         <Text className="text-content-secondary text-base leading-6 mb-4">
-          Build your opening repertoire.
+          Train your whole chess game.
         </Text>
         <Text className="text-accent text-base leading-6 mb-10">
-          Train with spaced repetition.
+          Openings, spaced repetition, and more.
         </Text>
 
         {/* Feature list */}
@@ -44,6 +44,7 @@ export default function LoginScreen() {
             { icon: 'chess-pawn', text: 'Import or build opening trees from PGN' },
             { icon: 'sword-cross', text: 'Drill-style practice and learning' },
             { icon: 'star-four-points-outline', text: 'Anki-style daily review sessions' },
+            { icon: 'toolbox-outline', text: 'A growing toolbox for the rest of your training' },
           ] as const).map(({ icon, text }) => (
             <View key={text} className="flex-row items-center gap-3">
               <View className="w-8 h-8 rounded-lg bg-accent/10 items-center justify-center">
