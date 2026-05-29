@@ -62,6 +62,8 @@ type SetupPhase = {
   questionsDraft: number;
   orientationDraft: BoardOrientation;
   showCoordsDraft: boolean;
+  showAnnounceIndicatorsDraft: boolean;
+  showQuestionFocusDraft: boolean;
 };
 
 type StaticPhase = {
@@ -149,6 +151,8 @@ const DEPTH_STORAGE_KEY = 'pawnki-vision-depth';
 const QUESTIONS_STORAGE_KEY = 'pawnki-vision-questions';
 const ORIENTATION_STORAGE_KEY = 'pawnki-vision-orientation';
 const COORDS_STORAGE_KEY = 'pawnki-vision-coords';
+const ANNOUNCE_IND_STORAGE_KEY = 'pawnki-vision-announce-ind';
+const QUESTION_FOCUS_STORAGE_KEY = 'pawnki-vision-question-focus';
 
 function clampToRange(n: number, lo: number, hi: number): number {
   if (!Number.isFinite(n)) return lo;
@@ -200,6 +204,17 @@ function loadCoordsPref(): boolean {
 function saveCoordsPref(b: boolean): void {
   try { localStorage.setItem(COORDS_STORAGE_KEY, b ? '1' : '0'); } catch { /* ignored */ }
 }
+function loadBoolPref(key: string, fallback: boolean): boolean {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+  } catch { /* ignored */ }
+  return fallback;
+}
+function saveBoolPref(key: string, b: boolean): void {
+  try { localStorage.setItem(key, b ? '1' : '0'); } catch { /* ignored */ }
+}
 
 // ── Component ─────────────────────────────────────────────────────────────
 export default function VisionTrainer() {
@@ -209,6 +224,8 @@ export default function VisionTrainer() {
     questionsDraft: loadQuestionsPref(),
     orientationDraft: loadOrientationPref(),
     showCoordsDraft: loadCoordsPref(),
+    showAnnounceIndicatorsDraft: loadBoolPref(ANNOUNCE_IND_STORAGE_KEY, false),
+    showQuestionFocusDraft: loadBoolPref(QUESTION_FOCUS_STORAGE_KEY, false),
   }));
   const [score, setScore] = useState<Score>(EMPTY_SCORE);
   const [openingName, setOpeningName] = useState<string>('');
@@ -219,6 +236,8 @@ export default function VisionTrainer() {
   const questionsPerRoundRef = useRef(DEFAULT_QUESTIONS_PER_ROUND);
   const orientationRef = useRef<BoardOrientation>('w');
   const showCoordsRef = useRef<boolean>(false);
+  const showAnnounceIndicatorsRef = useRef<boolean>(false);
+  const showQuestionFocusRef = useRef<boolean>(false);
 
   // Rolling-window exclusion: don't ask about a square that's already been
   // a focus in the last `depth` announced moves. Map of focus square → the
@@ -234,14 +253,20 @@ export default function VisionTrainer() {
     const qpr = phase.questionsDraft;
     const orientation = phase.orientationDraft;
     const showCoords = phase.showCoordsDraft;
+    const announceInd = phase.showAnnounceIndicatorsDraft;
+    const questionFocus = phase.showQuestionFocusDraft;
     saveDepthPref(depth);
     saveQuestionsPref(qpr);
     saveOrientationPref(orientation);
     saveCoordsPref(showCoords);
+    saveBoolPref(ANNOUNCE_IND_STORAGE_KEY, announceInd);
+    saveBoolPref(QUESTION_FOCUS_STORAGE_KEY, questionFocus);
     depthRef.current = depth;
     questionsPerRoundRef.current = qpr;
     orientationRef.current = orientation;
     showCoordsRef.current = showCoords;
+    showAnnounceIndicatorsRef.current = announceInd;
+    showQuestionFocusRef.current = questionFocus;
     recentAskedRef.current = new Map();
     absMoveRef.current = 0;
     setScore(EMPTY_SCORE);
@@ -434,10 +459,14 @@ export default function VisionTrainer() {
           questionsDraft={phase.questionsDraft}
           orientationDraft={phase.orientationDraft}
           showCoordsDraft={phase.showCoordsDraft}
+          showAnnounceIndicatorsDraft={phase.showAnnounceIndicatorsDraft}
+          showQuestionFocusDraft={phase.showQuestionFocusDraft}
           onChangeDepth={(n) => setPhase({ ...phase, depthDraft: n })}
           onChangeQuestions={(n) => setPhase({ ...phase, questionsDraft: n })}
           onChangeOrientation={(o) => setPhase({ ...phase, orientationDraft: o })}
           onChangeShowCoords={(b) => setPhase({ ...phase, showCoordsDraft: b })}
+          onChangeShowAnnounceIndicators={(b) => setPhase({ ...phase, showAnnounceIndicatorsDraft: b })}
+          onChangeShowQuestionFocus={(b) => setPhase({ ...phase, showQuestionFocusDraft: b })}
           onStart={handleStartSession}
         />
       </AppShell>
@@ -454,6 +483,8 @@ export default function VisionTrainer() {
             questionsDraft: questionsPerRoundRef.current || loadQuestionsPref(),
             orientationDraft: orientationRef.current || loadOrientationPref(),
             showCoordsDraft: showCoordsRef.current,
+            showAnnounceIndicatorsDraft: showAnnounceIndicatorsRef.current,
+            showQuestionFocusDraft: showQuestionFocusRef.current,
           })}
         />
       </AppShell>
@@ -468,6 +499,8 @@ export default function VisionTrainer() {
         depth={depthRef.current}
         orientation={orientationRef.current}
         showCoords={showCoordsRef.current}
+        showAnnounceIndicators={showAnnounceIndicatorsRef.current}
+        showQuestionFocus={showQuestionFocusRef.current}
         openingName={openingName}
         positionCount={positionCount}
         onSquareClick={handleSquareClick}
@@ -491,16 +524,22 @@ function getWorkingFenFromMoves(startFen: string, moves: MovePreview[]): string 
 // ── Setup screen ──────────────────────────────────────────────────────────
 function SetupScreen({
   depthDraft, questionsDraft, orientationDraft, showCoordsDraft,
-  onChangeDepth, onChangeQuestions, onChangeOrientation, onChangeShowCoords, onStart,
+  showAnnounceIndicatorsDraft, showQuestionFocusDraft,
+  onChangeDepth, onChangeQuestions, onChangeOrientation, onChangeShowCoords,
+  onChangeShowAnnounceIndicators, onChangeShowQuestionFocus, onStart,
 }: {
   depthDraft: number;
   questionsDraft: number;
   orientationDraft: BoardOrientation;
   showCoordsDraft: boolean;
+  showAnnounceIndicatorsDraft: boolean;
+  showQuestionFocusDraft: boolean;
   onChangeDepth: (n: number) => void;
   onChangeQuestions: (n: number) => void;
   onChangeOrientation: (o: BoardOrientation) => void;
   onChangeShowCoords: (b: boolean) => void;
+  onChangeShowAnnounceIndicators: (b: boolean) => void;
+  onChangeShowQuestionFocus: (b: boolean) => void;
   onStart: () => void;
 }) {
   return (
@@ -588,29 +627,24 @@ function SetupScreen({
           </div>
         </div>
 
-        <div className="mb-6 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-content-primary text-sm font-medium">Show board coordinates</div>
-            <div className="text-content-muted text-xs mt-0.5">a–h letters and 1–8 rank labels</div>
-          </div>
-          <button
-            type="button"
-            onClick={() => onChangeShowCoords(!showCoordsDraft)}
-            role="switch"
-            aria-checked={showCoordsDraft}
-            className={`relative w-11 h-6 rounded-full border transition-colors shrink-0 ${
-              showCoordsDraft
-                ? 'bg-accent/30 border-accent/60'
-                : 'bg-bg-base border-border'
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${
-                showCoordsDraft ? 'left-[22px] bg-accent' : 'left-0.5 bg-content-muted'
-              }`}
-            />
-          </button>
-        </div>
+        <SettingToggle
+          label="Show board coordinates"
+          hint="a–h letters and 1–8 rank labels"
+          value={showCoordsDraft}
+          onChange={onChangeShowCoords}
+        />
+        <SettingToggle
+          label="Show move announcement indicators"
+          hint="arrow and from→to highlights when a move is announced"
+          value={showAnnounceIndicatorsDraft}
+          onChange={onChangeShowAnnounceIndicators}
+        />
+        <SettingToggle
+          label="Show question target square"
+          hint="highlight the square being asked about (the X in 'pieces that see X')"
+          value={showQuestionFocusDraft}
+          onChange={onChangeShowQuestionFocus}
+        />
 
         <p className="text-content-muted text-xs mb-6 leading-5">
           Each batch:&nbsp;
@@ -637,6 +671,41 @@ function SetupScreen({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Switch-style toggle row used for boolean settings ────────────────────
+function SettingToggle({
+  label, hint, value, onChange,
+}: {
+  label: string;
+  hint: string;
+  value: boolean;
+  onChange: (b: boolean) => void;
+}) {
+  return (
+    <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <div className="text-content-primary text-sm font-medium">{label}</div>
+        <div className="text-content-muted text-xs mt-0.5">{hint}</div>
+      </div>
+      <button
+        type="button"
+        onClick={() => onChange(!value)}
+        role="switch"
+        aria-checked={value}
+        aria-label={label}
+        className={`relative w-11 h-6 rounded-full border transition-colors shrink-0 ${
+          value ? 'bg-accent/30 border-accent/60' : 'bg-bg-base border-border'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${
+            value ? 'left-[22px] bg-accent' : 'left-0.5 bg-content-muted'
+          }`}
+        />
+      </button>
     </div>
   );
 }
@@ -742,6 +811,8 @@ type LayoutProps = {
   depth: number;
   orientation: BoardOrientation;
   showCoords: boolean;
+  showAnnounceIndicators: boolean;
+  showQuestionFocus: boolean;
   openingName: string;
   positionCount: number;
   onSquareClick: (a: { square: string | null }) => void;
@@ -903,8 +974,15 @@ function useBoardState(p: LayoutProps): {
       const verdict = p.phase.verdict;
       const peeking = p.phase.peeking;
       const styles: Record<string, CSSProperties> = {};
-      for (const f of q.focusSquares) {
-        styles[f] = { backgroundColor: focusBg, boxShadow: focusRing };
+      // Focus highlight on the target square is gated by the user pref:
+      // when off, the player has to find the target purely from the prompt.
+      // It's always shown once a verdict is in so the player can read the
+      // green/orange/red feedback in context.
+      const showFocus = p.showQuestionFocus || verdict != null;
+      if (showFocus) {
+        for (const f of q.focusSquares) {
+          styles[f] = { backgroundColor: focusBg, boxShadow: focusRing };
+        }
       }
       if (verdict == null) {
         for (const s of p.phase.selected) {
@@ -960,10 +1038,19 @@ function useBoardState(p: LayoutProps): {
       const isBlack = m.pieceColor === 'b';
       const sanWithEllipsis = isBlack ? `…${m.san}` : m.san;
       const sideLabel = isBlack ? 'Black' : 'White';
+      // Optional on-board indicators (gated by the user pref): focus highlight
+      // on the from-square + accent ring on the to-square + an arrow between.
+      const styles: Record<string, CSSProperties> = {};
+      const arrows: { startSquare: string; endSquare: string; color: string }[] = [];
+      if (p.showAnnounceIndicators) {
+        styles[m.from] = { backgroundColor: focusBg, boxShadow: focusRing };
+        styles[m.to]   = { boxShadow: 'inset 0 0 0 3px rgb(var(--color-accent) / 0.95)' };
+        arrows.push({ startSquare: m.from, endSquare: m.to, color: 'rgb(var(--color-accent))' });
+      }
       return {
         boardFen: p.phase.visibleFen,
-        squareStyles: {},
-        arrows: [],
+        squareStyles: styles,
+        arrows,
         prompt: `Move played: ${sanWithEllipsis} (${sideLabel})${fullCycleLabel}`,
         helper: 'Read the move, picture it in your head, then click Next.',
         footer: (

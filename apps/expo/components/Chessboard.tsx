@@ -513,6 +513,7 @@ const LegalTargetIndicator = memo(function LegalTargetIndicator({
 // Memoized so selection state changes don't re-render 64 Pressables.
 const BoardSquares = memo(function BoardSquares({
   rows, cols, lightColor, darkColor, squareStyles, onSquareTap, disabled,
+  showNotation, notationFontSize,
 }: {
   rows: number[];
   cols: number[];
@@ -521,7 +522,12 @@ const BoardSquares = memo(function BoardSquares({
   squareStyles?: Record<string, StyleProp<ViewStyle>>;
   onSquareTap: (sq: string) => void;
   disabled: boolean;
+  showNotation: boolean;
+  /** Used to scale notation labels to the actual square size. 0 until measured. */
+  notationFontSize: number;
 }) {
+  const bottomRow = rows[rows.length - 1];
+  const leftCol = cols[0];
   return (
     <>
       {rows.map((row) => (
@@ -530,13 +536,50 @@ const BoardSquares = memo(function BoardSquares({
             const isLight = (row + col) % 2 === 0;
             const sq = squareId(row, col);
             const extra = squareStyles ? squareStyles[sq] : null;
+            // Coordinate label color: contrasts with the square.
+            const labelColor = isLight ? darkColor : lightColor;
+            const showFile = showNotation && row === bottomRow;
+            const showRank = showNotation && col === leftCol;
             return (
               <Pressable
                 key={col}
                 onPress={() => onSquareTap(sq)}
                 disabled={disabled}
                 style={[{ flex: 1, backgroundColor: isLight ? lightColor : darkColor }, extra]}
-              />
+              >
+                {showRank && notationFontSize > 0 && (
+                  <Text
+                    pointerEvents="none"
+                    style={{
+                      position: 'absolute',
+                      top: 1,
+                      left: 3,
+                      color: labelColor,
+                      fontSize: notationFontSize,
+                      fontWeight: '600',
+                      opacity: 0.85,
+                    }}
+                  >
+                    {String(8 - row)}
+                  </Text>
+                )}
+                {showFile && notationFontSize > 0 && (
+                  <Text
+                    pointerEvents="none"
+                    style={{
+                      position: 'absolute',
+                      bottom: 1,
+                      right: 3,
+                      color: labelColor,
+                      fontSize: notationFontSize,
+                      fontWeight: '600',
+                      opacity: 0.85,
+                    }}
+                  >
+                    {String.fromCharCode(97 + col)}
+                  </Text>
+                )}
+              </Pressable>
             );
           })}
         </View>
@@ -579,6 +622,8 @@ interface ChessboardProps {
   size?: number;
   /** Overlay arrows drawn from→to. Used to hint at already-practiced lines. */
   arrows?: Array<{ from: string; to: string; color?: string }>;
+  /** Render a–h / 1–8 coordinate labels in the corner squares. On by default. */
+  showNotation?: boolean;
 }
 
 export const Chessboard = memo(function Chessboard({
@@ -592,6 +637,7 @@ export const Chessboard = memo(function Chessboard({
   lightSquareColor,
   size,
   arrows,
+  showNotation = true,
 }: ChessboardProps) {
   const { colors: colorTheme } = useColorTheme();
   const resolvedDark = darkSquareColor ?? colorTheme.board.dark;
@@ -894,6 +940,8 @@ export const Chessboard = memo(function Chessboard({
         squareStyles={squareStyles}
         onSquareTap={handleSquareTap}
         disabled={!interactive && !selectMode}
+        showNotation={showNotation}
+        notationFontSize={Math.max(8, Math.min(13, Math.round(squareSize * 0.22)))}
       />
 
       {/* Layer 2: selection highlight overlay — separate so toggling

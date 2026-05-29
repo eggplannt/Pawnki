@@ -46,6 +46,9 @@ type SetupPhase = {
   depthDraft: number;
   questionsDraft: number;
   orientationDraft: BoardOrientation;
+  showCoordsDraft: boolean;
+  showAnnounceIndicatorsDraft: boolean;
+  showQuestionFocusDraft: boolean;
 };
 
 type StaticPhase = {
@@ -123,6 +126,9 @@ const MAX_DEPTH = 50;
 const DEPTH_STORAGE_KEY = 'pawnki-vision-depth';
 const QUESTIONS_STORAGE_KEY = 'pawnki-vision-questions';
 const ORIENTATION_STORAGE_KEY = 'pawnki-vision-orientation';
+const COORDS_STORAGE_KEY = 'pawnki-vision-coords';
+const ANNOUNCE_IND_STORAGE_KEY = 'pawnki-vision-announce-ind';
+const QUESTION_FOCUS_STORAGE_KEY = 'pawnki-vision-question-focus';
 
 function clampToRange(n: number, lo: number, hi: number): number {
   if (!Number.isFinite(n)) return lo;
@@ -148,6 +154,9 @@ export default function VisionTrainerScreen() {
   const depthRef = useRef(DEFAULT_DEPTH);
   const questionsPerRoundRef = useRef(DEFAULT_QUESTIONS_PER_ROUND);
   const orientationRef = useRef<BoardOrientation>('w');
+  const showCoordsRef = useRef<boolean>(false);
+  const showAnnounceIndicatorsRef = useRef<boolean>(false);
+  const showQuestionFocusRef = useRef<boolean>(false);
 
   // Rolling-window exclusion (matches web behavior).
   const recentAskedRef = useRef<Map<string, number>>(new Map());
@@ -157,21 +166,34 @@ export default function VisionTrainerScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const [d, q, o] = await Promise.all([
+        const [d, q, o, c, ai, qf] = await Promise.all([
           AsyncStorage.getItem(DEPTH_STORAGE_KEY),
           AsyncStorage.getItem(QUESTIONS_STORAGE_KEY),
           AsyncStorage.getItem(ORIENTATION_STORAGE_KEY),
+          AsyncStorage.getItem(COORDS_STORAGE_KEY),
+          AsyncStorage.getItem(ANNOUNCE_IND_STORAGE_KEY),
+          AsyncStorage.getItem(QUESTION_FOCUS_STORAGE_KEY),
         ]);
         const depthDraft = clampToRange(parseInt(d ?? '', 10) || DEFAULT_DEPTH, MIN_DEPTH, MAX_DEPTH);
         const questionsDraft = clampToRange(parseInt(q ?? '', 10) || DEFAULT_QUESTIONS_PER_ROUND, MIN_QUESTIONS, MAX_QUESTIONS);
         const orientationDraft: BoardOrientation = o === 'b' ? 'b' : 'w';
-        setPhase({ kind: 'setup', depthDraft, questionsDraft, orientationDraft });
+        const showCoordsDraft = c === '1';
+        const showAnnounceIndicatorsDraft = ai === '1';
+        const showQuestionFocusDraft = qf === '1';
+        setPhase({
+          kind: 'setup',
+          depthDraft, questionsDraft, orientationDraft, showCoordsDraft,
+          showAnnounceIndicatorsDraft, showQuestionFocusDraft,
+        });
       } catch {
         setPhase({
           kind: 'setup',
           depthDraft: DEFAULT_DEPTH,
           questionsDraft: DEFAULT_QUESTIONS_PER_ROUND,
           orientationDraft: 'w',
+          showCoordsDraft: false,
+          showAnnounceIndicatorsDraft: false,
+          showQuestionFocusDraft: false,
         });
       }
     })();
@@ -183,16 +205,25 @@ export default function VisionTrainerScreen() {
     const depth = phase.depthDraft;
     const qpr = phase.questionsDraft;
     const orientation = phase.orientationDraft;
+    const showCoords = phase.showCoordsDraft;
+    const announceInd = phase.showAnnounceIndicatorsDraft;
+    const questionFocus = phase.showQuestionFocusDraft;
     try {
       await Promise.all([
         AsyncStorage.setItem(DEPTH_STORAGE_KEY, String(depth)),
         AsyncStorage.setItem(QUESTIONS_STORAGE_KEY, String(qpr)),
         AsyncStorage.setItem(ORIENTATION_STORAGE_KEY, orientation),
+        AsyncStorage.setItem(COORDS_STORAGE_KEY, showCoords ? '1' : '0'),
+        AsyncStorage.setItem(ANNOUNCE_IND_STORAGE_KEY, announceInd ? '1' : '0'),
+        AsyncStorage.setItem(QUESTION_FOCUS_STORAGE_KEY, questionFocus ? '1' : '0'),
       ]);
     } catch { /* persisting prefs is best-effort */ }
     depthRef.current = depth;
     questionsPerRoundRef.current = qpr;
     orientationRef.current = orientation;
+    showCoordsRef.current = showCoords;
+    showAnnounceIndicatorsRef.current = announceInd;
+    showQuestionFocusRef.current = questionFocus;
     recentAskedRef.current = new Map();
     absMoveRef.current = 0;
     setScore(EMPTY_SCORE);
@@ -342,6 +373,13 @@ export default function VisionTrainerScreen() {
     setPhase({ ...phase, selected: next });
   }
 
+  // Always go through the tools index so the back arrow lands on /tools even
+  // if this screen was opened via a deep link, an HMR reload, or any other
+  // entry that left the navigation stack without /tools below us.
+  const navigateToTools = useCallback(() => {
+    router.replace('/(tabs)/tools');
+  }, [router]);
+
   // ── Render ────────────────────────────────────────────────────────────
   if (phase.kind === 'setup') {
     return (
@@ -349,10 +387,13 @@ export default function VisionTrainerScreen() {
         <SetupScreen
           phase={phase}
           colors={colorTheme}
-          onBack={() => router.back()}
+          onBack={navigateToTools}
           onChangeDepth={(n) => setPhase({ ...phase, depthDraft: clampToRange(n, MIN_DEPTH, MAX_DEPTH) })}
           onChangeQuestions={(n) => setPhase({ ...phase, questionsDraft: clampToRange(n, MIN_QUESTIONS, MAX_QUESTIONS) })}
           onChangeOrientation={(o) => setPhase({ ...phase, orientationDraft: o })}
+          onChangeShowCoords={(b) => setPhase({ ...phase, showCoordsDraft: b })}
+          onChangeShowAnnounceIndicators={(b) => setPhase({ ...phase, showAnnounceIndicatorsDraft: b })}
+          onChangeShowQuestionFocus={(b) => setPhase({ ...phase, showQuestionFocusDraft: b })}
           onStart={handleStartSession}
         />
       </AppShell>
@@ -365,12 +406,15 @@ export default function VisionTrainerScreen() {
         <SessionEndScreen
           score={score}
           colors={colorTheme}
-          onBackToTools={() => router.back()}
+          onBackToTools={navigateToTools}
           onNew={() => setPhase({
             kind: 'setup',
             depthDraft: depthRef.current || DEFAULT_DEPTH,
             questionsDraft: questionsPerRoundRef.current || DEFAULT_QUESTIONS_PER_ROUND,
             orientationDraft: orientationRef.current || 'w',
+            showCoordsDraft: showCoordsRef.current,
+            showAnnounceIndicatorsDraft: showAnnounceIndicatorsRef.current,
+            showQuestionFocusDraft: showQuestionFocusRef.current,
           })}
         />
       </AppShell>
@@ -384,6 +428,9 @@ export default function VisionTrainerScreen() {
         score={score}
         colors={colorTheme}
         orientation={orientationRef.current}
+        showCoords={showCoordsRef.current}
+        showAnnounceIndicators={showAnnounceIndicatorsRef.current}
+        showQuestionFocus={showQuestionFocusRef.current}
         openingName={openingName}
         positionCount={positionCount}
         onSquareSelect={handleSquareSelect}
@@ -405,7 +452,9 @@ function getWorkingFen(startFen: string, moves: MovePreview[]): string {
 
 // ── Setup screen ──────────────────────────────────────────────────────────
 function SetupScreen({
-  phase, colors, onBack, onChangeDepth, onChangeQuestions, onChangeOrientation, onStart,
+  phase, colors, onBack,
+  onChangeDepth, onChangeQuestions, onChangeOrientation, onChangeShowCoords,
+  onChangeShowAnnounceIndicators, onChangeShowQuestionFocus, onStart,
 }: {
   phase: SetupPhase;
   colors: ColorTheme;
@@ -413,9 +462,15 @@ function SetupScreen({
   onChangeDepth: (n: number) => void;
   onChangeQuestions: (n: number) => void;
   onChangeOrientation: (o: BoardOrientation) => void;
+  onChangeShowCoords: (b: boolean) => void;
+  onChangeShowAnnounceIndicators: (b: boolean) => void;
+  onChangeShowQuestionFocus: (b: boolean) => void;
   onStart: () => void;
 }) {
-  const { depthDraft, questionsDraft, orientationDraft } = phase;
+  const {
+    depthDraft, questionsDraft, orientationDraft, showCoordsDraft,
+    showAnnounceIndicatorsDraft, showQuestionFocusDraft,
+  } = phase;
   return (
     <ScrollView className="flex-1 bg-bg-base" contentContainerStyle={{ padding: 20 }}>
       <Pressable onPress={onBack} className="flex-row items-center gap-1 mb-4 active:opacity-70">
@@ -464,6 +519,25 @@ function SetupScreen({
           </View>
         </Field>
 
+        <SettingToggle
+          label="Show board coordinates"
+          hint="a–h letters and 1–8 rank labels"
+          value={showCoordsDraft}
+          onChange={onChangeShowCoords}
+        />
+        <SettingToggle
+          label="Show move announcement indicators"
+          hint="arrow and from→to highlights when a move is announced"
+          value={showAnnounceIndicatorsDraft}
+          onChange={onChangeShowAnnounceIndicators}
+        />
+        <SettingToggle
+          label="Show question target square"
+          hint="highlight the square being asked about"
+          value={showQuestionFocusDraft}
+          onChange={onChangeShowQuestionFocus}
+        />
+
         <Text className="text-content-muted text-xs mb-5 leading-5">
           Each batch:{' '}
           <Text className="text-content-secondary font-medium">{depthDraft}</Text> announced move{depthDraft === 1 ? '' : 's'},
@@ -494,6 +568,39 @@ function SetupScreen({
         </View>
       </View>
     </ScrollView>
+  );
+}
+
+function SettingToggle({
+  label, hint, value, onChange,
+}: {
+  label: string;
+  hint: string;
+  value: boolean;
+  onChange: (b: boolean) => void;
+}) {
+  return (
+    <Pressable
+      onPress={() => onChange(!value)}
+      className="mb-4 flex-row items-center justify-between gap-3 active:opacity-70"
+    >
+      <View className="flex-1">
+        <Text className="text-content-primary text-sm font-medium">{label}</Text>
+        <Text className="text-content-muted text-xs mt-0.5">{hint}</Text>
+      </View>
+      <View
+        className={`relative w-11 h-6 rounded-full border ${
+          value ? 'bg-accent/30 border-accent/60' : 'bg-bg-base border-border'
+        }`}
+      >
+        <View
+          className={`absolute top-0.5 w-4 h-4 rounded-full ${
+            value ? 'bg-accent' : 'bg-content-muted'
+          }`}
+          style={{ left: value ? 22 : 2 }}
+        />
+      </View>
+    </Pressable>
   );
 }
 
@@ -587,6 +694,9 @@ type TrainerScreenProps = {
   score: Score;
   colors: ColorTheme;
   orientation: BoardOrientation;
+  showCoords: boolean;
+  showAnnounceIndicators: boolean;
+  showQuestionFocus: boolean;
   openingName: string;
   positionCount: number;
   onSquareSelect: (sq: string) => void;
@@ -655,7 +765,9 @@ function TrainerScreen(p: TrainerScreenProps) {
             orientation={p.orientation === 'b' ? 'black' : 'white'}
             onSquareSelect={p.onSquareSelect}
             squareStyles={view.squareStyles}
+            arrows={view.arrows.length ? view.arrows : undefined}
             size={boardSize}
+            showNotation={p.showCoords}
           />
         </View>
       </View>
@@ -677,6 +789,7 @@ function depthOf(phase: Exclude<Phase, SetupPhase | { kind: 'end' }>): number {
 type BoardView = {
   boardFen: string;
   squareStyles: Record<string, StyleProp<ViewStyle>>;
+  arrows: Array<{ from: string; to: string; color?: string }>;
   prompt: string | null;
   helper: string | null;
   footer: React.ReactNode;
@@ -701,8 +814,14 @@ function buildBoardView(p: TrainerScreenProps, _boardSize: number): BoardView {
       const peeking = p.phase.peeking;
       const styles: Record<string, ViewStyle> = {};
 
-      for (const f of q.focusSquares) {
-        styles[f] = { backgroundColor: focusBg, borderWidth: 3, borderColor: focusBorder };
+      // Focus highlight on target square is gated by the user pref. Once
+      // feedback is in, always show it so the green/orange/red overlay
+      // reads in context.
+      const showFocus = p.showQuestionFocus || verdict != null;
+      if (showFocus) {
+        for (const f of q.focusSquares) {
+          styles[f] = { backgroundColor: focusBg, borderWidth: 3, borderColor: focusBorder };
+        }
       }
       if (verdict == null) {
         for (const s of p.phase.selected) {
@@ -726,6 +845,7 @@ function buildBoardView(p: TrainerScreenProps, _boardSize: number): BoardView {
       return {
         boardFen: peeking ? p.phase.imaginedFen : p.phase.visibleFen,
         squareStyles: styles,
+        arrows: [],
         prompt: q.prompt,
         helper: helperBits.join(' · '),
         footer: (
@@ -754,9 +874,17 @@ function buildBoardView(p: TrainerScreenProps, _boardSize: number): BoardView {
       const isBlack = m.pieceColor === 'b';
       const sanWithEllipsis = isBlack ? `…${m.san}` : m.san;
       const sideLabel = isBlack ? 'Black' : 'White';
+      const styles: Record<string, ViewStyle> = {};
+      const arrows: Array<{ from: string; to: string; color?: string }> = [];
+      if (p.showAnnounceIndicators) {
+        styles[m.from] = { backgroundColor: focusBg, borderWidth: 3, borderColor: focusBorder };
+        styles[m.to]   = { borderWidth: 3, borderColor: selectedBorder };
+        arrows.push({ from: m.from, to: m.to, color: colors.accent.default });
+      }
       return {
         boardFen: p.phase.visibleFen,
-        squareStyles: {},
+        squareStyles: styles,
+        arrows,
         prompt: `Move played: ${sanWithEllipsis} (${sideLabel})${fullCycleLabel}`,
         helper: 'Read the move, picture it in your head, then tap Next.',
         footer: (
@@ -781,6 +909,7 @@ function buildBoardView(p: TrainerScreenProps, _boardSize: number): BoardView {
       return {
         boardFen: p.phase.finalFen,
         squareStyles: {},
+        arrows: [],
         prompt: `${p.phase.visualizedMoves.length} move${p.phase.visualizedMoves.length === 1 ? '' : 's'} applied — the position you were imagining is now on the board.`,
         helper: 'Continue training on the updated position.',
         footer: (
@@ -805,6 +934,7 @@ function buildBoardView(p: TrainerScreenProps, _boardSize: number): BoardView {
       return {
         boardFen: 'start',
         squareStyles: {},
+        arrows: [],
         prompt: null,
         helper: null,
         footer: null,
