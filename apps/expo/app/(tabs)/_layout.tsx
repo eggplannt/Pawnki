@@ -38,6 +38,15 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="tools/index"
+        options={{
+          title: 'Tools',
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons name="toolbox-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="settings/index"
         options={{
           title: 'Settings',

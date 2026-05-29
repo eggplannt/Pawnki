@@ -8,6 +8,7 @@ const FEATURES = [
   { icon: '♟', text: 'Import or build opening trees from PGN' },
   { icon: '⚔', text: 'Drill style practice and learning' },
   { icon: '✦', text: 'Anki-style daily review sessions' },
+  { icon: '✶', text: 'A growing toolbox for the rest of your training' },
 ];
 
 export default function Login() {
@@ -42,9 +43,9 @@ export default function Login() {
             <PawnkiLogo size="xl" align="end" />
           </div>
           <p className="text-content-secondary text-lg md:text-xl leading-8 mb-10">
-            Build your opening repertoire.{' '}
-            <span className="text-accent">Train with spaced repetition.</span>{' '}
-            Never forget a line again.
+            Train your whole chess game.{' '}
+            <span className="text-accent">Spaced-repetition opening prep</span>{' '}
+            and a growing set of tools — all in one place.
           </p>
 
           <div className="hidden md:flex flex-col gap-4">
