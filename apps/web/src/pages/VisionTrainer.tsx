@@ -54,7 +54,15 @@ class BoardErrorBoundary extends Component<BoardErrorBoundaryProps, { errored: b
 // accumulate in the imaginedFen used to generate questions; the visible board
 // stays on the original FEN so the player must hold the changes in memory.
 
-type SetupPhase = { kind: 'setup'; depthDraft: number; questionsDraft: number };
+type BoardOrientation = 'w' | 'b';
+
+type SetupPhase = {
+  kind: 'setup';
+  depthDraft: number;
+  questionsDraft: number;
+  orientationDraft: BoardOrientation;
+  showCoordsDraft: boolean;
+};
 
 type StaticPhase = {
   kind: 'static';
@@ -139,6 +147,8 @@ const MAX_QUESTIONS = 10;
 // ── Slider preference persistence ─────────────────────────────────────────
 const DEPTH_STORAGE_KEY = 'pawnki-vision-depth';
 const QUESTIONS_STORAGE_KEY = 'pawnki-vision-questions';
+const ORIENTATION_STORAGE_KEY = 'pawnki-vision-orientation';
+const COORDS_STORAGE_KEY = 'pawnki-vision-coords';
 
 function clampToRange(n: number, lo: number, hi: number): number {
   if (!Number.isFinite(n)) return lo;
@@ -169,6 +179,27 @@ function loadQuestionsPref(): number {
 function saveQuestionsPref(n: number): void {
   try { localStorage.setItem(QUESTIONS_STORAGE_KEY, String(n)); } catch { /* ignored */ }
 }
+function loadOrientationPref(): BoardOrientation {
+  try {
+    const raw = localStorage.getItem(ORIENTATION_STORAGE_KEY);
+    if (raw === 'w' || raw === 'b') return raw;
+  } catch { /* ignored */ }
+  return 'w';
+}
+function saveOrientationPref(o: BoardOrientation): void {
+  try { localStorage.setItem(ORIENTATION_STORAGE_KEY, o); } catch { /* ignored */ }
+}
+function loadCoordsPref(): boolean {
+  try {
+    const raw = localStorage.getItem(COORDS_STORAGE_KEY);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+  } catch { /* ignored */ }
+  return false;
+}
+function saveCoordsPref(b: boolean): void {
+  try { localStorage.setItem(COORDS_STORAGE_KEY, b ? '1' : '0'); } catch { /* ignored */ }
+}
 
 // ── Component ─────────────────────────────────────────────────────────────
 export default function VisionTrainer() {
@@ -176,6 +207,8 @@ export default function VisionTrainer() {
     kind: 'setup',
     depthDraft: loadDepthPref(),
     questionsDraft: loadQuestionsPref(),
+    orientationDraft: loadOrientationPref(),
+    showCoordsDraft: loadCoordsPref(),
   }));
   const [score, setScore] = useState<Score>(EMPTY_SCORE);
   const [openingName, setOpeningName] = useState<string>('');
@@ -184,6 +217,8 @@ export default function VisionTrainer() {
   const batchesOnSceneRef = useRef(0);
   const depthRef = useRef(DEFAULT_DEPTH);
   const questionsPerRoundRef = useRef(DEFAULT_QUESTIONS_PER_ROUND);
+  const orientationRef = useRef<BoardOrientation>('w');
+  const showCoordsRef = useRef<boolean>(false);
 
   // Rolling-window exclusion: don't ask about a square that's already been
   // a focus in the last `depth` announced moves. Map of focus square → the
@@ -197,10 +232,16 @@ export default function VisionTrainer() {
     if (phase.kind !== 'setup') return;
     const depth = phase.depthDraft;
     const qpr = phase.questionsDraft;
+    const orientation = phase.orientationDraft;
+    const showCoords = phase.showCoordsDraft;
     saveDepthPref(depth);
     saveQuestionsPref(qpr);
+    saveOrientationPref(orientation);
+    saveCoordsPref(showCoords);
     depthRef.current = depth;
     questionsPerRoundRef.current = qpr;
+    orientationRef.current = orientation;
+    showCoordsRef.current = showCoords;
     recentAskedRef.current = new Map();
     absMoveRef.current = 0;
     setScore(EMPTY_SCORE);
@@ -391,8 +432,12 @@ export default function VisionTrainer() {
         <SetupScreen
           depthDraft={phase.depthDraft}
           questionsDraft={phase.questionsDraft}
+          orientationDraft={phase.orientationDraft}
+          showCoordsDraft={phase.showCoordsDraft}
           onChangeDepth={(n) => setPhase({ ...phase, depthDraft: n })}
           onChangeQuestions={(n) => setPhase({ ...phase, questionsDraft: n })}
+          onChangeOrientation={(o) => setPhase({ ...phase, orientationDraft: o })}
+          onChangeShowCoords={(b) => setPhase({ ...phase, showCoordsDraft: b })}
           onStart={handleStartSession}
         />
       </AppShell>
@@ -407,6 +452,8 @@ export default function VisionTrainer() {
             kind: 'setup',
             depthDraft: depthRef.current || loadDepthPref(),
             questionsDraft: questionsPerRoundRef.current || loadQuestionsPref(),
+            orientationDraft: orientationRef.current || loadOrientationPref(),
+            showCoordsDraft: showCoordsRef.current,
           })}
         />
       </AppShell>
@@ -419,6 +466,8 @@ export default function VisionTrainer() {
         phase={phase}
         score={score}
         depth={depthRef.current}
+        orientation={orientationRef.current}
+        showCoords={showCoordsRef.current}
         openingName={openingName}
         positionCount={positionCount}
         onSquareClick={handleSquareClick}
@@ -441,17 +490,22 @@ function getWorkingFenFromMoves(startFen: string, moves: MovePreview[]): string 
 
 // ── Setup screen ──────────────────────────────────────────────────────────
 function SetupScreen({
-  depthDraft, questionsDraft, onChangeDepth, onChangeQuestions, onStart,
+  depthDraft, questionsDraft, orientationDraft, showCoordsDraft,
+  onChangeDepth, onChangeQuestions, onChangeOrientation, onChangeShowCoords, onStart,
 }: {
   depthDraft: number;
   questionsDraft: number;
+  orientationDraft: BoardOrientation;
+  showCoordsDraft: boolean;
   onChangeDepth: (n: number) => void;
   onChangeQuestions: (n: number) => void;
+  onChangeOrientation: (o: BoardOrientation) => void;
+  onChangeShowCoords: (b: boolean) => void;
   onStart: () => void;
 }) {
   return (
-    <div className="flex-1 flex items-center justify-center p-6">
-      <div className="max-w-md w-full bg-bg-surface border border-border rounded-2xl p-8">
+    <div className="flex-1 flex items-center justify-center p-4 sm:p-6 overflow-auto">
+      <div className="max-w-md w-full bg-bg-surface border border-border rounded-2xl p-5 sm:p-8">
         <div className="flex items-center gap-3 mb-2">
           <div className="w-10 h-10 rounded-xl bg-accent/10 text-accent flex items-center justify-center">
             <Icon path={mdiEye} size={0.9} />
@@ -507,6 +561,55 @@ function SetupScreen({
             />
             <NumberInput value={questionsDraft} min={MIN_QUESTIONS} max={MAX_QUESTIONS} onChange={onChangeQuestions} ariaLabel="Questions per round" />
           </div>
+        </div>
+
+        <div className="mb-5">
+          <div className="flex items-baseline justify-between mb-2">
+            <label className="text-content-primary text-sm font-medium">
+              Board orientation
+            </label>
+            <span className="text-content-muted text-xs">which side at the bottom</span>
+          </div>
+          <div className="flex rounded-md border border-border overflow-hidden">
+            {(['w', 'b'] as const).map((o) => (
+              <button
+                key={o}
+                type="button"
+                onClick={() => onChangeOrientation(o)}
+                className={`flex-1 px-3 py-2 text-sm transition-colors ${
+                  orientationDraft === o
+                    ? 'bg-accent/15 text-accent font-medium'
+                    : 'bg-bg-base text-content-secondary hover:text-content-primary hover:bg-bg-elevated'
+                }`}
+              >
+                {o === 'w' ? 'White' : 'Black'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mb-6 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-content-primary text-sm font-medium">Show board coordinates</div>
+            <div className="text-content-muted text-xs mt-0.5">a–h letters and 1–8 rank labels</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onChangeShowCoords(!showCoordsDraft)}
+            role="switch"
+            aria-checked={showCoordsDraft}
+            className={`relative w-11 h-6 rounded-full border transition-colors shrink-0 ${
+              showCoordsDraft
+                ? 'bg-accent/30 border-accent/60'
+                : 'bg-bg-base border-border'
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${
+                showCoordsDraft ? 'left-[22px] bg-accent' : 'left-0.5 bg-content-muted'
+              }`}
+            />
+          </button>
         </div>
 
         <p className="text-content-muted text-xs mb-6 leading-5">
@@ -637,6 +740,8 @@ type LayoutProps = {
   phase: Exclude<Phase, SetupPhase | { kind: 'end' }>;
   score: Score;
   depth: number;
+  orientation: BoardOrientation;
+  showCoords: boolean;
   openingName: string;
   positionCount: number;
   onSquareClick: (a: { square: string | null }) => void;
@@ -646,6 +751,13 @@ type LayoutProps = {
   onAnnounceNext: () => void;
   onReviewNext: () => void;
   onEndSession: () => void;
+};
+
+// Notation labels (a–h, 1–8) at a responsive size: shrink on tight viewports
+// without disappearing, cap so they never dominate a desktop board.
+const COORD_NOTATION_STYLE: CSSProperties = {
+  fontSize: 'clamp(8px, 1.8vmin, 13px)',
+  fontWeight: 600,
 };
 
 function TrainerLayout(p: LayoutProps) {
@@ -663,7 +775,7 @@ function TrainerLayout(p: LayoutProps) {
       : [];
 
   return (
-    <div className="flex-1 flex flex-col p-4 lg:p-6 gap-3">
+    <div className="flex-1 flex flex-col p-3 lg:p-6 gap-2 lg:gap-3">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 flex-wrap max-w-[1200px] w-full mx-auto">
         <Link to="/tools" className="flex items-center gap-1 text-content-secondary hover:text-content-primary text-sm">
@@ -690,12 +802,15 @@ function TrainerLayout(p: LayoutProps) {
       <ScoreStrip score={p.score} openingName={p.openingName} positionCount={p.positionCount} />
 
       {/* Main column */}
-      <div className="flex-1 flex flex-col items-center gap-3 max-w-[720px] w-full mx-auto">
+      <div className="flex-1 flex flex-col items-center gap-2 lg:gap-3 max-w-[720px] w-full mx-auto">
         {view.prompt && <PromptBanner text={view.prompt} helper={view.helper} />}
 
         <div
           style={{
-            width: 'min(calc(100vw - 32px), calc(100vh - 380px), 600px)',
+            // dvh (dynamic viewport height) accounts for mobile browser chrome.
+            // Reserved-chrome estimate covers the AppShell (mobile header,
+            // banner ad, bottom nav) plus the trainer header/prompt/footer.
+            width: 'min(calc(100vw - 24px), calc(100dvh - 320px), 600px)',
             aspectRatio: '1 / 1',
             position: 'relative',
           }}
@@ -704,7 +819,7 @@ function TrainerLayout(p: LayoutProps) {
             <Chessboard
               options={{
                 position: view.boardFen,
-                boardOrientation: 'white',
+                boardOrientation: p.orientation === 'b' ? 'black' : 'white',
                 allowDragging: false,
                 animationDurationInMs: 240,
                 boardStyle: { borderRadius: '8px', boxShadow: '0 4px 20px rgba(0,0,0,0.3)' },
@@ -713,6 +828,13 @@ function TrainerLayout(p: LayoutProps) {
                 squareStyles: view.squareStyles,
                 arrows: view.arrows,
                 onSquareClick: p.onSquareClick,
+                showNotation: p.showCoords,
+                // Scale with the board: react-chessboard's notation defaults
+                // are fixed px sizes that overflow on small viewports.
+                alphaNotationStyle: COORD_NOTATION_STYLE,
+                darkSquareNotationStyle: COORD_NOTATION_STYLE,
+                lightSquareNotationStyle: COORD_NOTATION_STYLE,
+                numericNotationStyle: COORD_NOTATION_STYLE,
               }}
             />
           </BoardErrorBoundary>
@@ -834,11 +956,15 @@ function useBoardState(p: LayoutProps): {
     case 'announce': {
       const m = p.phase.announcement;
       const fullCycleLabel = p.phase.depth > 1 ? ` (cycle ${p.phase.cycleIndex} / ${p.phase.depth})` : '';
+      // Make whose turn it is unambiguous: ellipsis prefix for black + side label.
+      const isBlack = m.pieceColor === 'b';
+      const sanWithEllipsis = isBlack ? `…${m.san}` : m.san;
+      const sideLabel = isBlack ? 'Black' : 'White';
       return {
         boardFen: p.phase.visibleFen,
         squareStyles: {},
         arrows: [],
-        prompt: `Move played: ${m.san}${fullCycleLabel}`,
+        prompt: `Move played: ${sanWithEllipsis} (${sideLabel})${fullCycleLabel}`,
         helper: 'Read the move, picture it in your head, then click Next.',
         footer: (
           <div className="w-full flex items-center justify-end">
@@ -880,9 +1006,9 @@ function useBoardState(p: LayoutProps): {
 // ── UI bits ───────────────────────────────────────────────────────────────
 function PromptBanner({ text, helper }: { text: string; helper: string | null }) {
   return (
-    <div className="w-full bg-bg-surface border border-border rounded-xl p-3">
-      <p className="text-content-primary text-sm md:text-base leading-6">{text}</p>
-      {helper && <p className="text-content-muted text-xs mt-1 leading-5">{helper}</p>}
+    <div className="w-full bg-bg-surface border border-border rounded-lg lg:rounded-xl px-3 py-2 lg:p-3">
+      <p className="text-content-primary text-sm md:text-base leading-snug lg:leading-6">{text}</p>
+      {helper && <p className="text-content-muted text-xs mt-0.5 lg:mt-1 leading-snug lg:leading-5">{helper}</p>}
     </div>
   );
 }
@@ -977,17 +1103,16 @@ function ScoreStrip({ score, openingName, positionCount }: { score: Score; openi
   const total = score.correctSquares + score.wrongSquares + score.missedSquares;
   const pct = total === 0 ? null : Math.round((score.correctSquares / total) * 100);
   return (
-    <div className="max-w-[1200px] w-full mx-auto flex items-center justify-between text-xs text-content-muted flex-wrap gap-2 px-1">
-      <span>
+    <div className="max-w-[1200px] w-full mx-auto flex items-center justify-between text-xs text-content-muted gap-2 px-1 min-w-0">
+      <span className="truncate min-w-0 flex-1">
         {openingName && <span className="text-content-secondary">{openingName}</span>}
         {positionCount > 0 && <span className="ml-2 opacity-60">Position {positionCount}</span>}
       </span>
-      <span className="flex items-center gap-3">
+      <span className="flex items-center gap-2 lg:gap-3 shrink-0">
         {score.questionsAnswered > 0 && (
           <>
-            <span>{score.questionsAnswered} answered</span>
-            <span>{score.perfectAnswers} perfect</span>
-            {pct != null && <span className="text-content-secondary">{pct}% squares</span>}
+            <span>{score.perfectAnswers} ✓</span>
+            {pct != null && <span className="text-content-secondary">{pct}%</span>}
           </>
         )}
       </span>
