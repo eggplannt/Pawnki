@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import Icon from '@mdi/react';
-import { mdiChessPawn, mdiSwordCross, mdiCog, mdiWeatherSunny, mdiWeatherNight, mdiThemeLightDark, mdiLogout } from '@mdi/js';
+import { mdiChessPawn, mdiSwordCross, mdiCog, mdiToolboxOutline, mdiWeatherSunny, mdiWeatherNight, mdiThemeLightDark, mdiLogout } from '@mdi/js';
 import { useAuth } from '@/hooks/useAuth';
 import { useColorTheme } from '@/hooks/useColorTheme';
 import { PawnkiLogo, PawnkiIcon } from '@/components/Logo';
@@ -9,6 +9,7 @@ import { BannerAd } from '@/components/BannerAd';
 const NAV_ITEMS = [
   { label: 'Library',  to: '/library',  icon: mdiChessPawn },
   { label: 'Review',   to: '/review',   icon: mdiSwordCross },
+  { label: 'Tools',    to: '/tools',    icon: mdiToolboxOutline },
   { label: 'Settings', to: '/settings', icon: mdiCog },
 ];
 
